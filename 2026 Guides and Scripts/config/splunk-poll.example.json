@@ -1,0 +1,34 @@
+{
+  "_comment": "Example config for scripts/splunk_poll.py. Copy to a local file (e.g. config/splunk-poll.json) and edit. Credentials are NOT stored here: set SPLUNK_USERNAME and SPLUNK_PASSWORD in the environment before running with --execute.",
+  "_comment_splunk_url": "Exact IPv4 management URL (port 8089). The Splunk server is 172.20.240.20 in this lab. https only; no credentials, no hostnames.",
+  "splunk_url": "https://172.20.240.20:8089",
+  "_comment_index": "Where team_security events land. Confirm the actual index name with your Splunk admin before use.",
+  "index": "team_security",
+  "poll_interval": 15,
+  "max_evidence_files": 200,
+  "evidence_dir": "inject_evidence",
+  "timeout": 15,
+  "_comment_queries": "Detection leads, not confirmed findings. Keep each query small and scoped to the index. Adjust field names (uri, process, parent_process, dst_ip, dst_port) to match your actual event schema after a quick `| head` sanity check.",
+  "queries": [
+    {
+      "id": "webshell_markers",
+      "query": "index=team_security earliest=-5m latest=now (\"eval(\" OR \"base64_decode\" OR \"system(\" OR \"cmd.exe /c\") | table _time, host, uri, src_ip | head 100"
+    },
+    {
+      "id": "unexpected_iis_children",
+      "query": "index=team_security earliest=-5m latest=now parent_process=\"w3wp.exe\" (process=\"cmd.exe\" OR process=\"powershell.exe\" OR process=\"whoami.exe\" OR process=\"certutil.exe\") | table _time, host, process, command_line | head 100"
+    },
+    {
+      "id": "powershell_encoded_or_network",
+      "query": "index=team_security earliest=-5m latest=now (process=\"powershell.exe\" AND (command_line=\"*-enc*\" OR command_line=\"*FromBase64String*\" OR command_line=\"*IEX*\" OR command_line=\"*DownloadString*\")) | table _time, host, command_line | head 100"
+    },
+    {
+      "id": "new_outbound_connections",
+      "query": "index=team_security earliest=-5m latest=now eventtype=outbound (dst_port!=443 AND dst_port!=80) src_ip=\"172.20.240.*\" | stats min(_time) as first_seen, max(_time) as last_seen, count by dst_ip, dst_port, process | head 100"
+    },
+    {
+      "id": "suspicious_user_agents",
+      "query": "index=team_security earliest=-5m latest=now (user_agent=\"*sqlmap*\" OR user_agent=\"*nmap*\" OR user_agent=\"*nikto*\" OR user_agent=\"*masscan*\" OR user_agent=\"*dirbuster*\") | table _time, src_ip, uri, user_agent | head 100"
+    }
+  ]
+}

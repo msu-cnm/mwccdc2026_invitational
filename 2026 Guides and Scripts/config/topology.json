@@ -1,0 +1,92 @@
+[
+  {
+    "id": "rocky-ecom",
+    "name": "Rocky Ecom",
+    "os": "Rocky Linux 9",
+    "address": "172.20.240.10",
+    "public": "172.25.37.10",
+    "role": "Ecommerce; HTTP/HTTPS are candidate services, assignment unconfirmed",
+    "platform": "linux"
+  },
+  {
+    "id": "ubuntu-email",
+    "name": "Ubuntu Email",
+    "os": "Ubuntu 22.04",
+    "address": "172.20.240.15",
+    "public": "172.25.37.15",
+    "role": "Email; SMTP, POP3/IMAP and webmail are candidates, assignment unconfirmed",
+    "platform": "linux"
+  },
+  {
+    "id": "debian-splunk",
+    "name": "Debian Splunk",
+    "os": "Debian 12; Splunk 10.0.2",
+    "address": "172.20.240.20",
+    "public": "172.25.37.20",
+    "role": "Splunk authenticated query; exact endpoint, index and ingest paths unconfirmed",
+    "platform": "linux"
+  },
+  {
+    "id": "2022-ad",
+    "name": "2022 AD",
+    "os": "Windows Server 2022 Standard",
+    "address": "172.20.240.100",
+    "public": "172.25.37.100",
+    "role": "AD; DNS and domain authentication dependencies require discovery",
+    "platform": "windows"
+  },
+  {
+    "id": "2019-mssql",
+    "name": "2019 MSSQL",
+    "os": "Windows Server 2019 Standard",
+    "address": "172.20.240.120",
+    "public": "172.25.37.120",
+    "role": "SQL; instance, authentication mode and application dependencies unconfirmed",
+    "platform": "windows"
+  },
+  {
+    "id": "ubuntu-workstation",
+    "name": "Ubuntu Wkst",
+    "os": "Ubuntu; version unspecified",
+    "address": "DHCP",
+    "public": "172.31.37.2 (shared egress per packet)",
+    "role": "User workstation; Palo Alto browser management",
+    "platform": "linux"
+  },
+  {
+    "id": "windows11-workstation",
+    "name": "Windows 11 Wks",
+    "os": "Windows 11",
+    "address": "DHCP",
+    "public": "172.31.37.2 (shared egress per packet)",
+    "role": "User workstation; Palo Alto browser management",
+    "platform": "windows"
+  },
+  {
+    "id": "kali",
+    "name": "Kali",
+    "os": "Kali; version unspecified",
+    "address": "172.17.0.2",
+    "public": "172.31.37.2 (shared egress per packet)",
+    "role": "User workstation directly connected to VyOS",
+    "platform": "linux"
+  },
+  {
+    "id": "palo-alto",
+    "name": "Palo Alto",
+    "os": "PAN-OS 11.0.2",
+    "address": "outside 172.16.0.1/24; inside 172.20.240.254/24; management 172.20.240.200",
+    "public": "NAT mappings require discovery",
+    "role": "Boundary firewall; preserve security rules, NAT, routes and management",
+    "platform": "network"
+  },
+  {
+    "id": "vyos",
+    "name": "VyOS Router",
+    "os": "VyOS 1.4.0",
+    "address": "external 172.31.37.2/29; wkst 172.17.0.1/24; internal 172.16.0.254/24",
+    "public": "172.31.37.2",
+    "role": "Router; preserve forwarding, routes and NAT",
+    "platform": "network"
+  }
+]

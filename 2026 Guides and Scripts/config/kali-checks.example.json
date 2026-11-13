@@ -1,0 +1,50 @@
+{
+  "team": null,
+  "target_scope": "internal",
+  "_comment_team": "Set to your assigned team number (1-20) to enable public target validation. Leave null for internal-only use. Team 17: N = 20 + 17 = 37.",
+  "_comment_internal_targets": "Five fixed server addresses from the packet inventory. Provisional: confirm actual port assignments before enabling service checks.",
+  "_comment_public_targets": "Team 17 public targets: 172.25.37.10, .15, .20, .100, .120. Exclude core infrastructure (172.31.37.1), shared egress (172.31.37.2), and all other teams' addresses.",
+  "internal_targets": [
+    {
+      "id": "rocky-ecom",
+      "ip": "172.20.240.10",
+      "ports": [80, 443],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "ubuntu-email",
+      "ip": "172.20.240.15",
+      "ports": [25, 110, 143, 80, 443],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "debian-splunk",
+      "ip": "172.20.240.20",
+      "ports": [8000, 8089],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "2022-ad",
+      "ip": "172.20.240.100",
+      "ports": [53, 88, 135, 389, 445, 636, 3268],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "2019-mssql",
+      "ip": "172.20.240.120",
+      "ports": [1433, 1434],
+      "service_checks_enabled": false
+    }
+  ],
+  "public_targets": [],
+  "http_checks": [],
+  "_comment_http_checks": "Add after confirming endpoints. Example: {\"url\": \"http://172.20.240.10/\", \"expected_status\": 200, \"expected_content\": \"Welcome\"}. For IP-scoped HTTPS whose certificate is issued to a virtual-host name, set \"sni_hostname\": e.g. {\"url\": \"https://172.20.240.10/\", \"sni_hostname\": \"gateway.netlab.local\", \"expected_status\": 200}. No credentials in URLs. Redirects are never followed; response bodies are not stored.",
+  "timeouts": {
+    "connect_seconds": 3,
+    "read_seconds": 5
+  },
+  "probe_limits": {
+    "max_parallel": 1,
+    "delay_ms": 200
+  }
+}
