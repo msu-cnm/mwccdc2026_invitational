@@ -2,6 +2,14 @@
 
 These are operator procedures for the existing Debian 12 / Splunk 10.0.2 environment. Run them only on assigned machines after recording the change in the [event worksheet](event-checklist.md). Preserve scoring inputs and accounts. Do not reinstall working services. Use competition-permitted Splunk components under the existing license; no trial features are needed. No commands here have been executed on event hosts.
 
+Get the universal forwarder through wget:
+```bash
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi"
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz"
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb"
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c.x86_64.rpm "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c.x86_64.rpm"
+```
+
 `scripts/splunk_setup.py` generates the concrete per-host configuration files described below (universal-forwarder `outputs.conf`/`inputs.conf`, local UF `WinEventLog://` inputs for Windows, VyOS/PAN-OS syslog lines, or a Linux rsyslog relay). Select `plan` to preview; it writes nothing without `apply`. It does not install software, open ports, or change firewall/NAT rules. Example:
 
 ```bash
