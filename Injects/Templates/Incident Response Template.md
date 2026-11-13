@@ -1,17 +1,15 @@
 # Brief Incident Title
-Team 7
-To: MWCCDC Management Team
+Team 17
+To: CCDC Management Team
 From: Blue Team
-Date: 2/7/2026
-Subject: Security Breach [Change As Needed]
-Incident ID: 0001 [Change As Needed]
+Date: 11/13/2026
+Subject: 
+Incident ID: [#] 
 
 ## Executive Summary
 
-A security breach has been identified on the [machine] on 2/7/2026 at [time]. It has [been remediated/is being remediated].
+A security breach has been identified on the [machine] on 11/13/2026 at [time]. It has [been remediated/is being remediated].
 
-Incident ID:
-Date/Time Detected:
 Detected By: [indicators of compromise]
 Incident Type: [malware, credential compromise, etc.]
 Severity: [Low, Medium, High, CRITICAL]
@@ -54,7 +52,7 @@ Severity: [Low, Medium, High, CRITICAL]
 [how can we improve?]
 
 Incident Status: [Resolved/Monitoring/Ongoing]
-Date/Time Closed: 2/7/2026 at [time]
+Date/Time Closed: 11/13/2026 at [time]
 
 Best regards,
-Blue Team 7
+Blue Team 17
