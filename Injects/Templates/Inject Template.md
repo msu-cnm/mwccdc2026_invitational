@@ -1,8 +1,8 @@
 # Inject Title but Fancy
-Team 7
-To: MWCCDC Team2
+Team 17
+To: MWCCDC Team []
 From: Blue Team
-Date: 2/7/2026
+Date: 11/13/2026
 Subject: [Inject Number]
 
 ## Purpose
@@ -23,14 +23,14 @@ The blue team implemented the following measures:
 
 ## Action Items
 ### **Task 1:** [First task to be done]
-Assigned to: Team Member [#], 2/7/2026
+Assigned to: Team Member [#]
 [Add screenshots, code used, etc.]
 ### **Task 2:** [Next task]
-Assigned to: Team Member [#], 2/7/2026
+Assigned to: Team Member [#]
 [Add screenshots, code used, etc. Be sure to explain and label items.]
 
 ## Conclusion
 In response to Inject [inject #], the team responded promptly by [actions taken]. Doing so has strengthened the environment and ensured that [how it helped the comp environment]. We will continue to communicate any updates regarding this matter to ensure operations are maintained and all changes reflect the needs and wants of stakeholders and the company.
 
 Best regards,
-Blue Team 7
+Blue Team 17
