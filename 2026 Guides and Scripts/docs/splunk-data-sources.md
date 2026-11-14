@@ -2,6 +2,19 @@
 
 These are operator procedures for the existing Debian 12 / Splunk 10.0.2 environment. Run them only on assigned machines after recording the change in the [event worksheet](event-checklist.md). Preserve scoring inputs and accounts. Do not reinstall working services. Use competition-permitted Splunk components under the existing license; no trial features are needed. No commands here have been executed on event hosts.
 
+## Splunk Universal Forward downloads
+
+Windows
+```bash
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi"
+```
+Linux
+```bash
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c.x86_64.rpm "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c.x86_64.rpm"
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb"
+wget -O splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz"
+```
+
 ## How this guide works
 
 Every host is configured in the same three-step loop:
