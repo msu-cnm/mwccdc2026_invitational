@@ -1,0 +1,154 @@
+================================================================================
+2026 MWCCDC INVITATIONAL - VYOS 1.4.0 & KALI COMMAND CHEAT SHEET
+================================================================================
+
+TOPOLOGY & NETWORK REFERENCE:
+- VyOS Router (v1.4.0) [Default Creds: vyos / vyos]
+  * External (Core): 172.31.(20 + team#).2/29  | Gateway: 172.31.(20 + team#).1
+  * Workstation Net: 172.17.0.1/24
+  * Internal (to PA): 172.16.0.254/24
+- Kali Workstation [Default Creds: sysadmin / Changeme1!]
+  * IP: 172.17.0.2/24
+- Palo Alto Firewall (v11.0.2)
+  * Outside IP: 172.16.0.1/24 | Inside IP: 172.20.240.254/24
+- Team Public IP Pool: 172.25.(20 + team#).0/24
+  * .10  = Rocky Ecom (172.20.240.10)
+  * .15  = Ubuntu Email (172.20.240.15)
+  * .20  = Debian Splunk (172.20.240.20)
+  * .100 = 2022 AD / DNS (172.20.240.100)
+  * .120 = 2019 MSSQL (172.20.240.120)
+
+CRITICAL COMPETITION GUARDRAILS:
+1. KEEP ICMP ENABLED on VyOS and all systems (scored service).
+2. NO KNIFE-EDGE FILTERING: Never block all source IPs; only block confirmed malicious IPs.
+3. DO NOT CHANGE hostnames, usernames, or IP addressing unless directed by an inject.
+4. DO NOT SCAN outside your own team's IP space (immediate disqualification).
+
+================================================================================
+SECTION 1: VYOS 1.4.0 COMMANDS
+================================================================================
+
+--- 1A. OPERATIONAL MODE (Diagnostics & Threat Hunting) ---
+
+# System, Routing & Interface Checks
+show interfaces                                     # Check interface IPs and link status
+show ip route                                       # Verify default route to Core (.1)
+show arp                                            # View MAC-to-IP mappings on attached subnets
+show configuration commands                         # Dump full running config as 'set' commands
+
+# Active Threat Hunting & Traffic Inspection
+show conntrack table ipv4                           # View live stateful/NAT sessions
+show conntrack table ipv4 | grep <SUSPICIOUS_IP>    # Filter live connections by IP
+show log tail 50                                    # View last 50 lines of system logs
+show log auth                                       # Check for SSH brute-force / login attempts
+monitor traffic interface eth0                      # Live packet capture on interface
+monitor traffic interface eth0 filter 'not port 22' # Capture traffic excluding SSH
+
+# User & OS-Level Persistence Auditing
+show users                                          # Show currently logged-in sessions
+show configuration commands | grep user             # Audit configured VyOS users & SSH keys
+sudo ss -tulnp                                      # Check listening sockets on underlying Debian OS
+sudo crontab -l && ls -la /etc/cron*                # Check for unauthorized cron jobs
+
+--- 1B. CONFIGURATION MODE (Hardening & Safety Nets) ---
+Note: Type 'configure' to enter. Changes require 'commit' to apply and 'save' to persist.
+
+# Safety Nets (USE THESE!)
+configure
+commit-confirm 5                                    # Auto-reverts changes in 5 mins if locked out
+confirm                                             # Run within 5 mins to keep changes permanent
+compare                                             # Show diff between candidate and active config
+rollback 1                                          # Revert to previous saved config revision
+
+# Immediate First-5-Minute Hardening
+configure
+set system login user vyos authentication plaintext-password '<STRONG_NEW_PASSWORD>'
+set service ssh listen-address 172.17.0.1           # Restrict SSH management to Kali subnet only
+delete service telnet                               # Remove insecure services if present
+delete service https
+commit-confirm 5
+confirm
+save
+
+# Blocking a Malicious Red Team IP (VyOS 1.4 nftables Syntax)
+configure
+set firewall group address-group RED_TEAM_BLOCK address '<MALICIOUS_IP>'
+
+# Apply block to traffic passing THROUGH VyOS (Forward chain)
+set firewall ipv4 forward filter default-action accept
+set firewall ipv4 forward filter rule 10 action drop
+set firewall ipv4 forward filter rule 10 source group address-group RED_TEAM_BLOCK
+
+# Apply block to traffic destined FOR VyOS (Input chain)
+set firewall ipv4 input filter default-action accept
+set firewall ipv4 input filter rule 10 action drop
+set firewall ipv4 input filter rule 10 source group address-group RED_TEAM_BLOCK
+commit
+save
+
+# Adding Subsequent Bad IPs Later:
+configure
+set firewall group address-group RED_TEAM_BLOCK address '<NEW_BAD_IP>'
+commit
+save
+
+TO BACKUP CONFIG TO KALI AND RESTORE IT:
+scp vyos@172.17.0.1:/config/config.boot ~/config.boot
+#pulls it from VyOS to Kali
+scp ~/config.boot vyos@172.17.0.1:/config/restore.boot
+#puts it back on VyOS
+THEN:
+1. go to VyOS
+2. type 'configure'
+3. type 'load /config/restore.boot'
+SHOULD SAY: Load complete. Use 'commit' to make changes effective. If it warns about unsaved changes, type y to overwrite
+4. Review differences by typing 'compare' Verification: Shows lines being added (+) or removed (-) compared to what is currently running.
+5. commit safely and make it permanent: 'commit-confirm 5'
+6. Verification: Test connectivity (show interfaces, show ip route, and ping 172.16.0.1). Once confirmed working, run confirm followed by save to overwrite /config/config.boot so it persists across reboots.
+================================================================================
+SECTION 2: KALI WORKSTATION (172.17.0.2) COMMANDS
+================================================================================
+
+--- 2A. IMMEDIATE HARDENING (Kali sits outside the Palo Alto firewall!) ---
+
+passwd                                              # Change sysadmin password (default: Changeme1!)
+sudo passwd root                                    # Change root password
+sudo ufw default deny incoming                      # Block all unsolicited inbound connections
+sudo ufw default allow outgoing                     # Allow outbound monitoring/admin traffic
+sudo ufw enable                                     # Enable host firewall
+
+# Persistence & User Audit
+cat ~/.ssh/authorized_keys                          # Check for rogue SSH keys
+sudo ss -tulnp                                      # Check for unexpected listening services
+awk -F: '$3 >= 1000 {print $1}' /etc/passwd         # List all non-system user accounts
+
+--- 2B. NETWORK MONITORING & THREAT HUNTING ---
+
+# Live Packet Capture (tcpdump)
+sudo tcpdump -i eth0 -nn 'not port 22'              # Watch live traffic excluding SSH
+sudo tcpdump -i eth0 -nn -w /tmp/cap.pcap -C 50 -W 5 # Rotating 50MB PCAPs (keeps last 5)
+
+# Protocol Triage (tshark)
+sudo tshark -i eth0 -Y "http.request" -T fields -e ip.src -e http.host -e http.request.uri
+sudo tshark -i eth0 -Y "dns.flags.response == 0" -T fields -e ip.src -e dns.qry.name
+
+# Stream Remote Packet Capture from VyOS Directly into Kali Wireshark
+ssh vyos@172.17.0.1 "sudo tcpdump -i eth0 -U -w - 'not port 22'" | wireshark -k -i -
+
+--- 2C. EXTERNAL SERVICE REACHABILITY VERIFICATION ---
+Note: Replace 'X' with (20 + your team#). ONLY scan your own team's IP pool!
+
+nmap -sV -Pn 172.25.X.10 172.25.X.15 172.25.X.20 172.25.X.100 172.25.X.120
+curl -I http://172.25.X.10                          # Verify Ecom HTTP response
+dig @172.25.X.100 <domain>                          # Verify external DNS resolution
+nc -zv 172.25.X.15 25 110 143                       # Verify SMTP/POP3/IMAP ports
+
+================================================================================
+SECTION 3: INCIDENT REPORT QUICK-CAPTURE CHECKLIST (20% OF SCORE)
+================================================================================
+Whenever you block an IP or observe Red Team activity, record these 4 items:
+[ ] 1. Timestamps (CST) when attack started and when mitigation was applied.
+[ ] 2. Source IP (Attacker) and Destination IP/Port (Targeted asset).
+[ ] 3. Evidence snippet (log line, conntrack entry, or tshark/tcpdump capture).
+[ ] 4. Remediation taken (e.g., "Added IP to RED_TEAM_BLOCK on VyOS").
+================================================================================
