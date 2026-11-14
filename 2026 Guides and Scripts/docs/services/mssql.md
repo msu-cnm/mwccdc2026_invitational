@@ -12,13 +12,13 @@ Confirm SQL Server is installed, running, and discover the instance name and por
 # SQL Server service (default instance)
 Get-Service MSSQLSERVER | Select-Object Status, StartType
 # Named instances
-Get-WmiObject Win32_Service | Where-Object { $_.Name -like 'MSSQL$%' } | Select-Object Name, State, StartMode
+Get-CimInstance Win32_Service | Where-Object { $_.Name -like 'MSSQL$*' } | Select-Object Name, State, StartMode
 # Or via registry
 Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL" 2>$null
 # SQL Agent
 Get-Service SQLSERVERAGENT | Select-Object Status, StartType
 # Listening ports
-netstat -an | findstr ":1433\|:1434"
+netstat -an | Select-String ':1433\s|:1434\s'
 # SQL Browser (for named instances)
 Get-Service SQLBrowser | Select-Object Status
 ```
@@ -36,8 +36,8 @@ try:
 except: print('Port 1433: closed/filtered')
 finally: s.close()
 "
-# If sqlcmd or pyodbc is available
-python3 -c "import pyodbc; c=pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=172.20.240.120;DATABASE=master;Trusted_Connection=yes'); print(c.execute('SELECT @@VERSION').fetchone())"
+# TCP success alone does not validate SQL login; use the sqlcmd check below.
+
 ```
 
 ## Setup
@@ -59,8 +59,7 @@ Set-Service SQLSERVERAGENT -StartupType Automatic
 - **Default instance**: TCP 1433, no instance name suffix.
 - **Named instance**: dynamic port (discover via SQL Browser UDP 1434 or registry).
 - **Authentication mode**: Windows Auth vs Mixed Mode (SQL + Windows). Discover before changing:
-  ```powershell
-  # Via SQL Server Management Studio or T-SQL
+  ```sql
   -- Run in SSMS or sqlcmd
   SELECT SERVERPROPERTY('ServerName') AS server_name,
          SERVERPROPERTY('IsIntegratedSecurityOnly') AS windows_only;
@@ -96,7 +95,6 @@ PAN-OS CLI options (discovery only):
 show running security-policy | match 172.20.240.120
 show session all filter destination 172.20.240.120 destination-port 1433
 show interface ethernet1/2
-show zone
 ```
 
 GUI equivalent: Policies > Security, Monitor > Traffic, Network > Interfaces.
@@ -104,19 +102,21 @@ GUI equivalent: Policies > Security, Monitor > Traffic, Network > Interfaces.
 ## Monitoring
 
 ```powershell
-# Service health
+# Default instance; substitute discovered service names for named instances
 Get-Service MSSQLSERVER, SQLSERVERAGENT | Select-Object Name, Status
-# Connection count
--- T-SQL
-SELECT COUNT(*) AS open_connections FROM sys.dm_exec_sessions
-# Disk usage
-Get-Volume | Where-Object { $_.DriveLetter -eq 'C' } | Select-Object UsedSize, Size
-# Error log (last 20 entries)
--- T-SQL
-EXEC sp_readerrorlog 0, 1;
-# Performance counters
-Get-Counter '\SQLServer:General Statistics\Total Connections' -SampleInterval 5 -MaxSamples 3
+Get-Volume -DriveLetter C | Select-Object DriveLetter, SizeRemaining, Size
+# Discover actual/localized SQL counter paths before choosing a counter
+Get-Counter -ListSet '*SQL*' | Select-Object CounterSetName, Paths
 ```
+
+Run these separately in SSMS or sqlcmd:
+
+```sql
+SELECT COUNT(*) AS open_sessions FROM sys.dm_exec_sessions;
+EXEC sp_readerrorlog 0, 1;
+```
+
+DMV visibility requires the appropriate server permissions; an error or restricted result is not a healthy session count. `sp_readerrorlog` returns the current log, not just its last 20 rows.
 
 Forward SQL Server error logs to Splunk if required. Verify at Quotient that the scored application can query the database.
 
@@ -141,18 +141,13 @@ RESTORE VERIFYONLY FROM DISK = 'E:\SQLBackup\userdb-<UTC>.bak' WITH CHECKSUM;
 
 Verify the scored application can connect and query:
 
-```powershell
-# From the application server (Rocky Ecom or Ubuntu Email)
--- T-SQL via sqlcmd or application connection string
-SELECT TOP 5 * FROM [scored_database].[dbo].[scored_table]
+On Windows with the installed ODBC `sqlcmd`, use the verified FQDN and port. `-E` uses the current Windows identity; for SQL authentication use `-U <user>` without `-P` so it prompts. Check `sqlcmd -?` for the installed variant and keep server certificate validation enabled:
 
-# From Kali (if authorized)
-python3 -c "
-import pyodbc
-c = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=172.20.240.120;DATABASE=<db>;UID=<user>;PWD=<pass>')
-print(c.execute('SELECT COUNT(*) FROM <table>').fetchone())
-"
+```powershell
+sqlcmd -S 'tcp:<sql-fqdn>,<port>' -E -d '<scored_database>' -b -Q 'SELECT TOP (5) * FROM [dbo].[scored_table];'
 ```
+
+A Linux client needs its own installed SQL client/ODBC driver and authentication setup; Windows integrated authentication does not work automatically on an unconfigured Kali host. Run the actual application workflow as well as this read-only query.
 
 Test from both internal and public paths. Confirm Quotient shows the scored query returning expected data.
 
@@ -160,10 +155,11 @@ Test from both internal and public paths. Confirm Quotient shows the scored quer
 
 1. Identify the issue: service down, database offline, or application connection failure.
 2. If service stopped: `Start-Service MSSQLSERVER`
-3. If database offline: `ALTER DATABASE [<db>] SET ONLINE` (if possible) or restore from backup:
+3. Diagnose the database state before changing it. `ALTER DATABASE [<db>] SET ONLINE` applies only to a deliberately offline database after its underlying issue is resolved; it does not repair corruption. Inspect the selected backup before planning a restore:
    ```sql
-   RESTORE DATABASE [<db>] FROM DISK = 'C:\backup\sql-<db>-<timestamp>.bak' WITH REPLACE
+   RESTORE FILELISTONLY FROM DISK = 'E:\SQLBackup\userdb-<UTC>.bak';
    ```
+   This inspects the selected backup only. Plan a restore with the DBA, matching logical files, destination paths, recovery chain and downtime; do not use `WITH REPLACE` as a generic fix.
 4. If configuration is corrupted, compare the saved instance configuration and repair only confirmed differences; do not blindly import an entire SQL registry tree.
 5. Verify with a test query from the application server.
 6. Record UTC time and residual exposure.

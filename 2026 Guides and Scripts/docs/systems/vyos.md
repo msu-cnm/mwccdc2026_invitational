@@ -20,9 +20,64 @@ Back up the running saved configuration securely using the supported `save` path
 
 Use `commit-confirm 5` only after verifying this build supports it and understanding the timeout. Test the resulting paths from authorized endpoints and observe Quotient before `confirm` and `save`. If testing fails, do not confirm; use the console to restore the known-good configuration or allow the confirmed-commit rollback, then verify routes/NAT/services. Do not save a failed candidate. Monitor interface counters, route changes, conntrack pressure and configuration commits. Do not run the generic Linux hardener on the router appliance.
 
+## Command modes, backup and restore
+
+Operational commands below run at the `$` prompt. After `configure`, the `[edit]` / `#` prompt uses `show` for **candidate configuration**; prefix operational commands with `run` (for example `run show interfaces`). Use `top` before full-path `set`, `delete` or `load` examples. CLI `?` and Tab discover completions; `show help` is not a backup command.
+
+```text
+# Operational mode: explicit executable commands for VyOS 1.4.0
+show version
+show interfaces
+show ip route
+show nat source rules
+show nat destination rules
+show nat source statistics
+show nat destination statistics
+show dhcp server leases
+show dhcp server statistics
+show firewall statistics
+show conntrack statistics
+show log 200
+```
+
+`show log 200` is the tagged 1.4.0 current-boot journal command. The `tail` variant in that release belongs under `show log image <image>`, not directly under `show log`. DHCP commands apply only when this router actually serves DHCP. Interface detail uses `show interfaces ethernet eth0` with the discovered interface name. NAT/firewall/conntrack command roots are not substitutes for these explicit subcommands.
+
+Before changes, enter configuration mode, inspect pending edits and save a native backup under a unique name:
+
+```text
+configure
+top
+compare
+# Stop if compare contains unexplained pending edits
+save /config/pre-change-YYYYMMDDTHHMMSSZ.boot
+exit
+```
+
+The name contains a timestamp placeholder to replace manually. Keep an independent protected copy. `show configuration commands` is useful for comparison, but its set-command text is not a native file for `load`. Ensure the healthy running configuration is also saved to the default startup file before maintenance. Do not save an unconfirmed failed change.
+
+For console recovery with the native backup:
+
+```text
+configure
+top
+load /config/pre-change-YYYYMMDDTHHMMSSZ.boot
+compare
+commit-confirm 5
+# Run functional checks from another authorized client before these final commands
+confirm
+save
+exit
+```
+
+Enter `confirm` only after the checks pass, within five minutes. The default timeout action is **reboot**, interrupting routing/NAT and downstream scoring; inspect `show system config-management` in configuration mode for a configured `commit-confirm action reload`. Do not change that policy blindly. `rollback 1` can reboot immediately; it is not equivalent to loading a candidate and then committing it. The image rollback procedure below is separate again.
+
 ## Scripts and reversible changes
 
-Use native appliance CLI/GUI commands below; the Linux and Windows scripts are not supported on this appliance. No automatic firewall/routing script is supplied because live policies, dependencies and exact scored port assignments are not present in the packet.
+Generate the native VyOS 1.4 plan with `python3 scripts/vyos_guard.py plan --host vyos`. Follow the [hardening procedure](../hardening.md) for preflight, console recovery and validation. It adds `firewall ipv4 name TEAM-HARDEN`, reached through IPv4 input-filter rule 1 on the configured ingress interface. Rule 1 and this name must be unused. Trusted SSH returns to existing input policy; untrusted SSH is dropped. Other ingress interfaces and IPv6 require separate reviewed policies.
+
+In configuration mode, save a baseline with `save /config/team-before.boot`, paste the generated set commands, and review `show | diff`. Run `commit-confirm 5`, test fresh trusted/untrusted SSH and scored traffic, then `confirm` and `save` within five minutes. The interval is in minutes; without confirmation the default timeout action can reboot the router. Review `show system config-management` first.
+
+Rollback from console: delete `firewall ipv4 input filter rule 1` first, then `firewall ipv4 name TEAM-HARDEN`; review, `commit-confirm 5`, test, `confirm`, `save`. If anything else changed, compare against the saved baseline before restoring it.
 
 ## Monitoring and scoring verification
 
@@ -61,11 +116,11 @@ Syslog has local and optional remote targets; inspect actual `system syslog` set
 
 ## Threat hunting
 
-Use an authorized operator account for the read-only commands below; CLI capabilities vary by image, so inspect `?`/tab completion rather than dropping into unsupported shell commands. Use a fixed UTC incident interval (start with 15 minutes). `show log tail 200` bounds output; if retained rows do not reach the interval start, this is incomplete coverage: inspect the appropriate bounded archived log through native categories or the collector. Configuration output can expose hashes/keys; store it privately.
+Use an authorized operator account for the read-only commands below; CLI capabilities vary by image, so inspect `?`/tab completion rather than dropping into unsupported shell commands. Use a fixed UTC incident interval (start with 15 minutes). `show log 200` bounds output; if retained rows do not reach the interval start, this is incomplete coverage: inspect the appropriate bounded archived log through native categories or the collector. Configuration output can expose hashes/keys; store it privately.
 
-1. **Hypothesis: an unauthorized administrator changed access or installed persistent configuration.** Inspect `show log tail 200` and the authorization category available through `show log ?`, retaining only events in the chosen interval. Run `show system commit` and inspect `show system commit diff 1` (confirm syntax in this build), then compare `show configuration commands` for login users/keys, SSH/API, syslog and task/script configuration against approved baseline. In configuration mode use `compare` to detect uncommitted edits without committing. Unknown source/login plus new key or logging removal is suspicious. Team maintenance and automation are benign explanations; verify operator/inject records, preserve diff and correlate later actions. A new committed configuration without an authentication record may signal missing logs or noninteractive access.
+1. **Hypothesis: an unauthorized administrator changed access or installed persistent configuration.** Inspect `show log 200` and the authorization category available through `show log ?`, retaining only events in the chosen interval. Run `show system commit` and inspect `show system commit diff 1` (confirm syntax in this build), then compare `show configuration commands` for login users/keys, SSH/API, syslog and task/script configuration against approved baseline. In configuration mode use `compare` to detect uncommitted edits without committing. Unknown source/login plus new key or logging removal is suspicious. Team maintenance and automation are benign explanations; verify operator/inject records, preserve diff and correlate later actions. A new committed configuration without an authentication record may signal missing logs or noninteractive access.
 2. **Hypothesis: traffic was redirected by a route/NAT/firewall edit.** Capture `show ip route`, `show interfaces` and `show configuration commands`, comparing to the last approved export; inspect latest five commit entries and their relevant diffs. Look for changed core next hop, unexpected more-specific routes, changed destination NAT or permissive rule/order. Planned injects, DHCP changes or dynamic routing convergence can explain differences. Determine which routes are static/dynamic and correlate the control-plane peer/commit and affected service; test only authorized paths before targeted restoration. Current state cannot show a reverted transient attack without retained history.
-3. **Hypothesis: an exposed management service is being abused or an internal host is creating unusual flows.** Inspect `show log tail 200` for SSH/API/monitoring errors and authentication source addresses during the fixed interval. Use the image's available `show conntrack ?` summary/table and native NAT operational subcommands via `show nat ?`; take one bounded display (at most 200 rows) and compare two snapshots five minutes apart. Filter to an already identified host/session when supported. Unexpected external management sources, new high-volume destinations or rapid failures after an unknown commit warrant endpoint correlation. Patches, backups, research and legitimate mail connections are benign explanations; compare with dependency inventory and peer host logs. Existing conntrack entries are state, not a historical packet log, and unsupported filtering should be replaced with bounded collector searches rather than full packet capture.
+3. **Hypothesis: an exposed management service is being abused or an internal host is creating unusual flows.** Inspect `show log 200` for SSH/API/monitoring errors and authentication source addresses during the fixed interval. Use the image's available `show conntrack ?` summary/table and native NAT operational subcommands via `show nat ?`; take one bounded display (at most 200 rows) and compare two snapshots five minutes apart. Filter to an already identified host/session when supported. Unexpected external management sources, new high-volume destinations or rapid failures after an unknown commit warrant endpoint correlation. Patches, backups, research and legitimate mail connections are benign explanations; compare with dependency inventory and peer host logs. Existing conntrack entries are state, not a historical packet log, and unsupported filtering should be replaced with bounded collector searches rather than full packet capture.
 
 ## Splunk monitoring
 

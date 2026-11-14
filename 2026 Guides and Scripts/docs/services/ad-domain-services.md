@@ -19,11 +19,11 @@ Get-ADDomainController -Filter * | Select-Object Name, Site, Domain
 # Kerberos (port 88)
 netstat -an | findstr ":88"
 # LDAP / LDAPS
-netstat -an | findstr ":389\|:636"
+netstat -an | Select-String ':389\s|:636\s'
 # Global Catalog
-netstat -an | findstr ":3268\|:3269"
+netstat -an | Select-String ':3268\s|:3269\s'
 # SMB / RPC
-netstat -an | findstr ":135\|:445"
+netstat -an | Select-String ':135\s|:445\s'
 # NTP (if relevant)
 w32tm /query /status
 ```
@@ -35,7 +35,7 @@ From a Linux client:
 kinit <user>@<DOMAIN>  # expect prompt for password
 klist  # verify ticket
 # LDAP
-ldapsearch -x -H ldap://172.20.240.100 -b "DC=<domain>,DC=<tld>" -s base "(objectClass=*)" 2>/dev/null | head -20
+ldapsearch -x -H ldap://172.20.240.100 -b "DC=<domain>,DC=<tld>" -s base "(objectClass=*)" | head -20
 ```
 
 ## Setup
@@ -65,7 +65,7 @@ Start-Service LanmanWorkstation
 ### LDAP (TCP 389) and LDAPS (TCP 636)
 
 - Verify `NTDS` service is running.
-- Check for StartTLS vs LDAPS: `Get-ADDomainController -Identity <dc> | Select-Object LDAPPort, GlobalCatalogPort`
+- Port reachability does not verify TLS. From Kali with OpenLDAP tools, validate LDAPS using `LDAPTLS_CACERT=/path/to/ad-ca.pem ldapsearch -x -H ldaps://<dc-fqdn>:636 -D "<user>@<domain>" -W -b "" -s base defaultNamingContext`; for StartTLS use `-H ldap://<dc-fqdn>:389 -ZZ`. Keep certificate and hostname verification enabled.
 - If LDAPS is required, a valid certificate must be bound to the DC.
 
 ### Global Catalog (TCP 3268/3269)
@@ -90,7 +90,7 @@ Ensure all required ports are open on the relevant interfaces:
 
 ```powershell
 # Check existing rules
-netsh advfirewall firewall show rule name=all | findstr "88\|389\|636\|135\|445\|3268\|3269\|123"
+netsh advfirewall firewall show rule name=all | Select-String '88|389|636|135|445|3268|3269|123'
 # Add missing rules (only if confirmed needed)
 netsh advfirewall firewall add rule name="Kerberos" dir=in action=allow protocol=TCP localport=88
 netsh advfirewall firewall add rule name="LDAP" dir=in action=allow protocol=TCP localport=389
@@ -110,7 +110,6 @@ show running security-policy | match 172.20.240.100
 show session all filter destination 172.20.240.100 destination-port 389
 show session all filter destination 172.20.240.100 destination-port 88
 show interface ethernet1/2
-show zone
 ```
 
 GUI equivalent: Policies > Security, Monitor > Traffic, Network > Interfaces.
@@ -122,11 +121,12 @@ GUI equivalent: Policies > Security, Monitor > Traffic, Network > Interfaces.
 Get-Service KDC, Netlogon, DNS, LanmanWorkstation | Select-Object Name, Status
 # Event log (Directory Service)
 Get-WinEvent -FilterHashtable @{LogName='Directory Service'; Level=2} -MaxEvents 20
-Get-EventLog System -Newest 20 -Source "Kerberos"
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4768,4769,4771; StartTime=(Get-Date).AddMinutes(-15)} -MaxEvents 20
 # Replication health (if multiple DCs)
 repadmin /replsummary
 # Performance
-Get-Counter '\Kerberos-Server\Ticket Requests/sec' -SampleInterval 5 -MaxSamples 3
+# Discover installed/localized counter sets before selecting a path
+Get-Counter -ListSet '*Kerberos*' | Select-Object CounterSetName, Paths
 ```
 
 Forward AD event logs to Splunk if the packet requires. Verify at Quotient that domain authentication works for the scored email/webmail check.
@@ -138,11 +138,14 @@ Back up AD configuration before any change:
 ```powershell
 # System State backup (includes AD, SYSVOL, registry)
 # Requires Windows Server Backup and a separate approved E: backup volume.
+# Check Get-WindowsFeature Windows-Server-Backup first; if missing, install:
+# Install-WindowsFeature Windows-Server-Backup
 # Check Get-Volume and wbadmin get versions -backupTarget:E: afterward.
 # Do not substitute a directory on the source/system volume.
 wbadmin start systemstatebackup -backuptarget:E: -quiet
 
-# Alternative: export key config
+# Inventory only (not an alternative to System State)
+New-Item -ItemType Directory -Force C:\backup | Out-Null
 $dc = Get-ADDomainController -Identity $env:COMPUTERNAME
 $dc | Export-Csv "C:\backup\ad-dc-config-$(Get-Date -Format 'yyyyMMddHHmmss').csv" -NoTypeInformation
 
@@ -157,15 +160,16 @@ No VM snapshots. Configuration exports and SYSVOL copies are inventories, not re
 Verify domain authentication end-to-end:
 
 ```powershell
-# Kerberos ticket
-klist get ldap/<dc-fqdn>  # from a client
-# LDAP bind
-ldapsearch -x -H ldap://172.20.240.100 -D "<user>@<domain>" -W -b "DC=<domain>,DC=<tld>" "(sAMAccountName=<user>)" 2>/dev/null
+# On a domain-joined Windows client, substitute the DC FQDN
+klist get ldap/<dc-fqdn>
+```
 
-# From Linux (Kali or Ubuntu Email)
-kinit <user>@<DOMAIN>
+```bash
+# On Kali/Linux with krb5-user and ldap-utils, using the verified realm and CA
+kinit <user>@<REALM>
 klist
-# Then verify email/webmail auth uses this domain
+LDAPTLS_CACERT=/path/to/ad-ca.pem ldapsearch -x -H ldaps://<dc-fqdn>:636 \
+  -D '<user>@<domain>' -W -b 'DC=<domain>,DC=<tld>' '(sAMAccountName=<user>)'
 ```
 
 Test from both internal and public paths. Confirm Quotient shows successful domain authentication.
@@ -174,8 +178,8 @@ Test from both internal and public paths. Confirm Quotient shows successful doma
 
 1. Identify which service is down: `Get-Service KDC, Netlogon, DNS`
 2. Restart in dependency order: DNS → KDC → Netlogon
-3. If replication issue: `repadmin /syncall /AdeP`
-4. If SYSVOL corrupted: `net share` to verify, then restore from backup
+3. Diagnose replication with `repadmin /replsummary` and `repadmin /showrepl`; repair DNS/time/connectivity before considering a coordinated replication action.
+4. If SYSVOL is missing, inspect `net share` and DFS Replication logs. Use a rehearsed AD/DFSR recovery procedure with a known-good System State backup; copying a SYSVOL inventory back is not a supported AD restore.
 5. Verify with `kinit` and `ldapsearch` from a client
 6. Record UTC time and residual exposure
 

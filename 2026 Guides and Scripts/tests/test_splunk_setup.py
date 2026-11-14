@@ -38,6 +38,36 @@ class SplunkSetupTests(unittest.TestCase):
         self.assertIn('/var/log/custom', files['inputs.conf'])
         self.assertNotIn('/var/log/secure', files['inputs.conf'])
 
+    def test_indexer_local_collection_does_not_forward_to_itself(self):
+        files, note = self.plan('debian-splunk')
+        self.assertEqual(set(files), {'inputs.conf'})
+        self.assertIn('existing Splunk', note)
+
+    def test_invalid_transport_destinations_and_config_injection_rejected(self):
+        for receiver in ('bad host', '192.0.2.999', '::1', 'host;commit', 'host\ncommit', '-bad.example'):
+            with self.subTest(receiver=receiver), self.assertRaises(ValueError):
+                self.plan('vyos', method='syslog', receiver=receiver)
+        for port in (0, 65536, -1, True):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                self.plan('vyos', method='syslog', port=port)
+        with self.assertRaises(ValueError):
+            self.plan('rocky-ecom', index='team\n[evil]')
+        for item in ('relative.log', '/var/log/x\x00', '/var/log/x\n[evil]:raw', '/var/log/x:raw\ndisabled=1'):
+            with self.subTest(item=item), self.assertRaises(ValueError):
+                self.plan('rocky-ecom', inputs=[item])
+
+    def test_unsupported_collection_methods_rejected(self):
+        for host, method in (('vyos', 'forwarder'), ('palo-alto', 'forwarder'),
+                             ('2022-ad', 'syslog'), ('rocky-ecom', 'syslog')):
+            with self.subTest(host=host, method=method), self.assertRaises(ValueError):
+                self.plan(host, method=method)
+
+    def test_hostname_receiver_and_custom_source_are_preserved(self):
+        files, _ = self.plan('ubuntu-email', receiver='splunk.lab.example',
+                             inputs=['/var/log/mail.log:mail:raw'])
+        self.assertIn('server = splunk.lab.example:9997', files['outputs.conf'])
+        self.assertIn('sourcetype = mail:raw', files['inputs.conf'])
+
     def test_linux_syslog_relay_uses_tcp(self):
         files, _ = self.plan('debian-splunk', method='syslog', port=1514)
         self.assertIn('rsyslog-team-relay.conf', files)

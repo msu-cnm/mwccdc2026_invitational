@@ -2,7 +2,7 @@
 
 Rerun on 2026-11-13 in the supplied development checkout:
 
-- `python3 -m unittest discover -s tests -v`: 7 tests pass. Kernel operations are mocked; no development or event kernel settings were changed. Tests cover dry-run non-mutation, exclusive/restricted backup creation, repeat-application rejection, repeated rollback, partial-apply failure recovery, invalid backup/CLI rejection, narrow setting scope and exact 10-guide coverage against the packet transcription.
+- `python3 -m unittest discover -s tests -v`: 7 tests pass. Kernel operations are mocked; no development or event kernel settings were changed. Tests cover dry-run non-mutation, exclusive/restricted backup creation, repeat-application rejection, repeated rollback, partial-apply failure recovery, invalid backup/CLI rejection, narrow setting scope and exact 10-guide coverage against the packet transcription. `python3 -m unittest discover -s tests` now also covers the new firewall plan generation for linux_guard.py and vyos_guard.py (tests/test_guard.py, tests/test_vyos_guard.py); windows_guard.ps1 Firewall action is plan-only by default and was not executed (PowerShell not installed).
 - `python3 -m py_compile scripts/linux_guard.py`: passes.
 - `python3 scripts/linux_guard.py harden`: passes, prints proposed values without writing them.
 
@@ -103,3 +103,20 @@ git diff --cached --check
 All **96 tests** passed, compilation and plan/help commands succeeded, and both whitespace checks passed. REST calls in tests are mocked. Regression coverage includes form-encoded credentials, POST job submission, JSON response selection, session-key authorization, dispatch-state completion, two consecutive cycles returning identical rows (zero new rows and no second evidence file), and shared deduplication state in the CLI loop.
 
 This does not validate a real Splunk login, field extraction, search results, certificates, appliance telemetry, Windows commands or scoring. Rehearse with the actual Splunk build and verified fields before operational use. Known limits: query-only failures can be reported as `no new events` without a file; deduplication is process-local and grows with distinct rows; second-resolution filenames can collide; pruning deletes old evidence. These limits are described in the playbook.
+
+## Student toolkit offline validation
+
+The address helper, IOC query builder, timeline and report formatter have offline unit coverage. Regression tests cover combined JSON/file report output, redaction counts and supported secret names, protected report backups, symlink rejection, and numeric monitor ports. No live Splunk, appliance, Windows deployment or scoring checks were performed. See the [quick-start](student-toolkit.md).
+
+
+## Repository command audit (2026-11-13)
+
+See [command review](command-audit.md) for the platform/service findings and versioned sources. Corrected all ten service guides plus VyOS/PAN-OS host workflows, collection setup and IOC time generation. New regression cases cover invalid receiver/port/config values, unsupported collection methods, indexer local collection without self-forwarding, and timezone-equivalent absolute SPL times.
+
+Final offline verification: **197 tests pass** with `python3 -m unittest discover -s tests -q`; all nine Python scripts (including `scripts/panos_guard.py`) compile and their `--help`/`plan` commands succeed; per-host firewall plans succeed for all ten topology hosts via `config/host-firewall.json`. Both `git diff --check` and `git diff --cached --check` pass. All plans ran without execution flags. No live probes, package installations, service restarts, appliance changes, Git commits, merges, pushes or Git configuration changes were performed.
+
+VyOS operational/configuration syntax was compared with tagged 1.4.0 definitions where linked. The Windows/PowerShell, PAN-OS, database and Splunk commands were reviewed but were not run on representative systems. Installed builds, features, policies, permissions, secrets, CA trust, paths, source fields and functional scoring must still be checked in the authorized environment. Offline tests cannot guarantee live command success.
+
+## Host firewall checks
+
+See [hardening](hardening.md) for exact application and recovery. Run `python3 -m unittest discover -s tests -q`. On each target Windows version run `powershell -NoProfile -File tests/test_windows_guard.ps1` to check both default CIDR conversions, complement ranges, workstation profile and generated parameter names against installed NetSecurity metadata. These plan checks do not apply policy. Target connection tests and effective GPO review remain necessary. PowerShell and appliance runtimes are unavailable in this workspace.

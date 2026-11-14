@@ -8,7 +8,8 @@ Candidate hardening area, not a scored service: the packet assigns VyOS (p.13) t
 
 ### VyOS 1.4.0 (read-only)
 
-```bash
+```text
+# Operational mode ($ prompt), not configuration mode (# / [edit])
 # Identity and interfaces
 show version
 show interfaces
@@ -16,15 +17,19 @@ show ip route
 # Full current configuration (protect the output: it may contain secrets)
 show configuration commands
 # NAT and forwarding state
-show nat
-show ip traffic   # counters, sample briefly then stop
+show nat source rules
+show nat destination rules
+show nat source statistics
+show nat destination statistics
+show interfaces ethernet eth0
 # DHCP server state on the workstation segment
-show dhcp-server
+show dhcp server leases
+show dhcp server statistics
 # Any existing firewall rules (do not assume none exist)
-show firewall
+show firewall statistics
 ```
 
-Confirm the three interfaces match the packet: external **172.31.37.2/29** toward core 172.31.37.1, internal **172.16.0.254/24** toward Palo Alto outside 172.16.0.1, workstation **172.17.0.1/24** toward Kali 172.17.0.2. Record the exact NAT rules providing workstation/Kali egress and any port forwards — these are the paths you must keep working.
+The following addresses use **team 17 only as an example**: substitute 20 + your team in the third octet. Confirm interface names from discovery; eth0/eth1/eth2 are examples, not guaranteed mappings. Confirm external **172.31.37.2/29** toward core 172.31.37.1, internal **172.16.0.254/24** toward Palo Alto outside 172.16.0.1, workstation **172.17.0.1/24** toward Kali 172.17.0.2. Record the exact NAT rules providing workstation/Kali egress and any port forwards — these are the paths you must keep working.
 
 ### Palo Alto PAN-OS 11.0.2 (read-only)
 
@@ -35,7 +40,6 @@ show system info
 show interface all
 show routing route
 show session info
-show zone
 ```
 
 GUI: Monitor > Traffic, System, Config; Policies > Security, NAT. Record the **actual** rule order in every policy set — PAN-OS is first-match, so where your new rules land matters as much as what they say. Identify which NAT mappings produce the public 172.25.37.x egress and any port forwards for scored services.
@@ -59,6 +63,7 @@ Apply per vendor, in this order: interfaces first (so you know exactly what each
 ```
 # Read current state first (config mode), then compare before commit
 configure
+top
 compare
 set interfaces ethernet eth0 address '172.31.37.2/29'      # external — only if discovery shows a mismatch
 set interfaces ethernet eth1 address '172.16.0.254/24'     # internal toward Palo Alto
@@ -68,7 +73,7 @@ set interfaces ethernet eth2 address '172.17.0.1/24'       # workstation segment
 commit-confirm 5
 ```
 
-Use `commit-confirm 5` (auto-rollback on timeout) for every commit while hardening; it is the built-in safety net if a rule breaks your own console path.
+`commit-confirm 5` gives five minutes to validate, then `confirm` and `save` in configuration mode. Timeout defaults to a **router reboot**, interrupting downstream traffic; inspect the existing `system config-management commit-confirm action` setting. A configured `reload` action behaves differently. Keep the independent console open. Operational checks while at `[edit]` require `run`, for example `run show ip route`; bare `show` there displays candidate configuration. Return to the root with `top` before pasting full configuration paths.
 
 ### VyOS management and firewall changes
 
@@ -90,14 +95,14 @@ Verify, don't reassign: zone membership of inside/outside/management, virtual ro
 
 Order matters (first-match). Add at the **bottom** of the security policy unless a rule must precede a permissive one:
 
-1. **Explicit deny with logging** for traffic between zones you have not verified as scored — log-only first, review, then convert to drop if no legitimate flow appears.
+1. **Review logging on existing rules** and inventory legitimate flows before proposing any deny. PAN-OS has no generic log-only deny action: changing a rule to deny immediately blocks matching traffic. Missing recent traffic does not prove a dependency is unused.
 2. **Management access restriction**: allow GlobalProtect/HTTPS management (443) and SSH from the authorized inside sources only; deny management from the outside zone. Confirm the current administrator list first so you do not lock yourself out — keep a second console (NETLAB) open during the change.
 3. **ICMP**: preserve echo reply for scored ping checks; add a rule allowing ICMP between zones where the packet requires it rather than relying on default behavior.
 4. **Preserve** every existing NAT mapping and port forward you identified in Discovery — these carry the public scoring traffic.
 
 ### Palo Alto DoS prevention
 
-1. **DoS protection profile**: enable TCP flood (SYN/ACK), UDP flood, and ICMP flood protection with rate limits set from your observed baseline (start permissive, measure, tighten). Apply to the outside zone interfaces.
+1. **DoS protection profile**: enable TCP flood (SYN/ACK), UDP flood, and ICMP flood protection with rate limits set from your observed baseline (start permissive, measure, tighten). Zone Protection profiles attach to zones; DoS Protection profiles attach through Policies > DoS Protection rules. Do not interchange these two mechanisms; use the one reviewed for the installed platform.
 2. **Session limits**: set a maximum session count and per-source session limits on the outside zone so one source cannot exhaust the session table; keep the global limit above the peak you measured in `show session info`.
 3. **SYN proxy / SYN cookies**: enable for the outside zone if the installed 11.0.x supports it on this model — verify in help first.
 4. **DNS abuse**: inspect DNS traffic and protect the DNS server against unintended recursion. Apply only supported, measured protection profiles while preserving UDP/TCP scoring queries; no generic RFC-based firewall toggle is assumed.
@@ -107,11 +112,14 @@ Order matters (first-match). Add at the **bottom** of the security policy unless
 
 ### VyOS
 
-```bash
-show ip traffic            # per-interface counters — compare before/after any rule change
-show firewall              # hit counters on each rule (candidate syntax — verify on device)
-show conntrack             # connection table size; a flood shows as rapid growth
-show log                   # local syslog; forward to Splunk if the packet's logging path requires it
+```text
+# Operational mode; substitute each discovered interface name
+show interfaces ethernet eth0
+show nat source statistics
+show nat destination statistics
+show firewall statistics
+show conntrack statistics
+show log 200
 ```
 
 Baseline the counter deltas for 5 minutes at idle, then re-check after any attacker activity or your own scoring tests. A jump in external-interface drops that correlates with a session-table spike is your DoS early warning.
@@ -134,14 +142,18 @@ Alert on: session count approaching your configured maximum; DoS profile hit cou
 
 ### VyOS
 
-```bash
-# Export the running configuration to a file you control, then verify it contains the current state
-show configuration commands > /home/<admin>/vyos-config-<UTC-timestamp>.txt
-# On the appliance, use the supported save path (verify with `show help`) to persist the current config image
-# Keep at least: (1) pre-hardening baseline, (2) post-change state. Retain both until the event ends.
+Use a native configuration file for recovery (choose a unique timestamped filename):
+
+```text
+configure
+top
+compare
+# Continue only if compare is empty; resolve existing candidate edits first
+save /config/pre-change-YYYYMMDDTHHMMSSZ.boot
+exit
 ```
 
-Protect the export — it may contain secrets. Test the restore path in a safe window: load the baseline file on a non-event day and confirm `compare` is empty.
+`save <path>` writes a native configuration suitable for `load <path>`; `show configuration commands` is a text review/export and must not be passed to `load`. Protect and securely copy the native backup off the appliance. This named backup does not update the default startup file. Keep a known-good startup configuration before a change using `save` only after confirming the running state is healthy. See the [VyOS host workflow](../systems/vyos.md#command-modes-backup-and-restore) for restore commands.
 
 ### Palo Alto
 
@@ -156,7 +168,7 @@ scp export configuration from pre-change.xml to backupuser@BACKUP_HOST:/protecte
 
 The CLI example saves the **candidate** configuration: review pending edits first and ensure this snapshot represents the intended known-good state. Replace the backup host/user/path; protect exports and use a unique filename for each backup. Do not treat an HA synchronization command as a backup.
 
-Also export **device state** (Device > Setup > Operations > Device State) so you can restore licenses, certificates and admin accounts, not just policy. Retain at least one pre-hardening backup until the event ends; verify it opens in the restore dialog before relying on it.
+Also export **device state** (Device > Setup > Operations > Device State) for the supported device-state recovery workflow, including device configuration and related state. Licensing and certificate/private-key recovery need separate vendor-supported checks; do not assume every artifact is restored by an XML snapshot. Retain at least one pre-hardening backup until the event ends; verify it opens in the restore dialog before relying on it.
 
 ## Usage and scoring verification
 
@@ -168,12 +180,12 @@ Hardening is only acceptable if every scored path still works end-to-end. After 
 4. **Management**: confirm you can still reach the Palo Alto GUI at 172.20.240.200 from an authorized inside host and the VyOS CLI via NETLAB console.
 5. **Quotient**: confirm the scored checks show their expected status after each change; record results in the [functional verification sheet](../event-checklist.md#functional-scoring-verification).
 
-If any check regresses, revert the last rule immediately (VyOS: `rollback 1`; PAN-OS: restore the pre-change backup) before diagnosing.
+If any check regresses, restore the reviewed native pre-change backup from console using the procedure below; PAN-OS requires loading and committing its backup.
 
 ## Recovery
 
-1. **Device unreachable via network but console works**: you broke a rule or interface config. VyOS: `rollback 1` (or load the baseline file) then `commit-confirm 5`. PAN-OS: restore the pre-change configuration backup from Device > Setup > Operations, then commit.
-2. **Both paths lost (console and network)**: use NETLAB console on both devices; VyOS can be rolled back to the previous boot image per its [image workflow](../systems/vyos.md); PAN-OS can boot the previous configuration via console mode if the running config is corrupted.
+1. **Device unreachable via network but console works**: you broke a rule or interface config. VyOS: in configuration mode use `top`, `load /config/pre-change-YYYYMMDDTHHMMSSZ.boot`, `compare`, then `commit-confirm 5`; validate before `confirm` and `save`. `rollback 1` is a separate disruptive recovery command that can reboot immediately, not a candidate edit to follow with another commit. PAN-OS: restore the pre-change configuration backup from Device > Setup > Operations, then commit.
+2. **Network and normal management lost**: use NETLAB console on both devices; if NETLAB itself is unavailable, contact staff before proceeding. VyOS can be rolled back to the previous boot image per its [image workflow](../systems/vyos.md); PAN-OS can boot the previous configuration via console mode if the running config is corrupted.
 3. **DoS in progress**: identify the source from session/conntrack counters and the Splunk searches; apply a targeted drop for that source (evidence-backed, p.17) rather than broad restrictions; verify scored paths still pass after the drop.
 4. **Management takeover suspected**: change administrator credentials through the approved interactive path with a second console open, disable unused management services, and record UTC time and residual exposure in the [event worksheet](../event-checklist.md).
 5. After any recovery, re-run the full [usage verification](#usage-and-scoring-verification) list and re-take backups.

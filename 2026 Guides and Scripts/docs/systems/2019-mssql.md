@@ -30,9 +30,13 @@ From the repository root in PowerShell (elevate for application):
 .\scripts\windows_guard.ps1 -Action Harden -Apply -Backup C:\Secure\audit-before.csv
 .\scripts\windows_guard.ps1 -Action Rollback -Backup C:\Secure\audit-before.csv
 .\scripts\windows_guard.ps1 -Action Rollback -Apply -Backup C:\Secure\audit-before.csv
+# Firewall hardening (plan-only by default; -Action Firewall creates Defender rules):
+.\scripts\windows_guard.ps1 -Action Firewall -HostId 2019-mssql
 ```
 
-Harden enables only success/failure Logon auditing. It backs up the full audit policy; rollback restores that full policy and may overwrite later audit changes. Coordinate with other operators and GPO before rollback. Repeat application to the same backup path is rejected. Restrict the backup directory's ACL to operators and SYSTEM. Increased audit volume can fill logs: monitor retention and disk use. Assess exports event counts rather than raw credential-bearing messages; unavailable event access can produce empty counts, which is not proof of no incidents. The script does not change firewall, accounts or services.
+Harden enables only success/failure Logon auditing. It backs up the full audit policy; rollback restores that full policy and may overwrite later audit changes. Coordinate with other operators and GPO before rollback. Repeat application to the same backup path is rejected. Restrict the backup directory's ACL to operators and SYSTEM. Increased audit volume can fill logs: monitor retention and disk use. Assess exports event counts rather than raw credential-bearing messages; unavailable event access can produce empty counts, which is not proof of no incidents. The Harden action does not change firewall, accounts or services; Firewall is a separate action.
+
+**Firewall hardening:** use the [per-host hardening procedure](../hardening.md). Windows uses supported `RemoteAddress` ranges for the complement of the selected host's trusted IPv4 networks and explicitly blocks IPv6 SSH. Existing effective GPO or block rules can still prevent trusted SSH; test fresh connections. Other service ports are preserved.
 
 ## Monitoring and scoring verification
 

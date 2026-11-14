@@ -14,7 +14,7 @@ ss -lntu | grep -E ':25|:465|:587'
 dpkg-query -W | grep -i 'postfix\|exim\|sendmail'
 ```
 
-Note: Do not assume Postfix; discover the actual daemon. If `exim` or `sendmail` appears, adjust commands accordingly (e.g., `eximdbctl status`, `sendmail -bv`).
+Note: Do not assume Postfix; discover the actual daemon. If `exim` or `sendmail` appears, adjust commands accordingly (for Exim inspect `exim4 -bV` and `exim4 -bp`; for Sendmail inspect `sendmail -bp`).
 
 ## Setup
 
@@ -34,7 +34,7 @@ Select the verified mail domain in the package dialog. Installing Postfix alone 
 Relay policy: Preserve legitimate inbound domain delivery and authenticated users while preventing unauthenticated third-party relay.
 
 - TLS certificates: Generate or verify existing certs; configure Postfix `smtpd_tls_cert_file` and `smtpd_tls_key_file`.
-- SASL authentication: Integrate with Active Directory via LDAP (`ldapauth`, `sasl_passwd`).
+- SASL authentication: inspect `postconf -a` and preserve the working Dovecot/Cyrus server-side SASL backend and its AD integration. `smtp_sasl_password_maps` / `sasl_passwd` supplies outbound relay credentials; it does not authenticate inbound users against AD.
 - DNS records: Ensure MX, A, and PTR are correct for reverse DNS checks.
 
 Keep plaintext port 25 if scored until TLS requirements confirmed; do not disable without portal confirmation.
@@ -43,8 +43,8 @@ Keep plaintext port 25 if scored until TLS requirements confirmed; do not disabl
 # /etc/postfix/main.cf (example)
 smtpd_tls_security_level = may
 smtpd_relay_restrictions = permit_mynetworks permit_sasl_authenticated reject_unauth_destination
-mydestination = $myhostname, localhost.$mydomain, localhost
-relay_domains = $mydestination
+# Preserve existing mydestination, virtual_mailbox_domains, relay_domains,
+# transport_maps and recipient maps; replacing these can stop domain delivery.
 ```
 
 ### Palo Alto CLI options
@@ -77,9 +77,16 @@ journalctl -u postfix --since 1h | grep -iE "accept|reject|deliver"
 Back up SMTP configuration (`main.cf`, virtual aliases, TLS certs), mailbox data, and queue state. Use protected paths with timestamps. No VM snapshots. A queue listing is evidence, not a message backup.
 
 ```bash
-# Backup config with timestamp
-cp -p /etc/postfix/main.cf "/backups/postfix-$(date +%Y%m%d-%H%M%S).cf"
-tar czf "/backups/mailbox-$(date +%Y%m%d-%H%M%S).tar.gz" /var/mail /var/vmail
+# Run as root; choose actual existing mail paths before archiving
+umask 077
+BACKUP_DIR="/root/backup-smtp-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -m 700 "$BACKUP_DIR"
+cp -a /etc/postfix "$BACKUP_DIR/"
+postconf -n > "$BACKUP_DIR/postconf-n.txt"
+postqueue -p > "$BACKUP_DIR/queue-list.txt"
+# Example ONLY if discovery confirms this mailbox root; quiesce writes first
+tar -czpf "$BACKUP_DIR/mailbox.tar.gz" -C /var/mail .
+tar -tzf "$BACKUP_DIR/mailbox.tar.gz" >/dev/null
 ```
 
 ## Usage and scoring verification
@@ -98,11 +105,11 @@ swaks --server <mail-fqdn> --port 587 --tls --auth LOGIN \
 
 ## Recovery
 
-Rollback steps: restore saved configuration, run native validator (`postfix check` or equivalent), reload. If mail queue is corrupted, restore from backup. Record UTC time.
+Rollback steps: restore saved configuration, run native validator (`postfix check` or equivalent), reload. A live queue copy is not a consistent queue backup. Preserve damaged queue evidence and use a mail-stack-specific recovery plan; do not replay a stale queue blindly. Record UTC time.
 
 ```bash
 # Restore config
-cp "/backups/postfix-YYYYMMDD-HHMMSS.cf" /etc/postfix/main.cf
+cp -a "$BACKUP_DIR/postfix/." /etc/postfix/
 postfix check
 systemctl restart postfix
 ```

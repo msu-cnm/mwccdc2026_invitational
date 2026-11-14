@@ -66,11 +66,16 @@ Ensure TCP 22 (or the discovered port) is reachable from the scoring path:
 
 ```bash
 # Rocky / RHEL
-sudo firewall-cmd --query-port=22/tcp || sudo firewall-cmd --add-port=22/tcp --permanent && sudo firewall-cmd --reload
+sudo firewall-cmd --get-active-zones
+# Substitute the actual ingress zone; query first, add only if confirmed missing
+sudo firewall-cmd --zone=<zone> --query-service=ssh
+# If SSH service/port is missing, add to runtime AND permanent state
+sudo firewall-cmd --zone=<zone> --add-service=ssh
+sudo firewall-cmd --zone=<zone> --permanent --add-service=ssh
 
 # Debian / Ubuntu (ufw or iptables)
 sudo ufw status | grep 22
-sudo iptables -L INPUT -n | grep ':22'
+sudo iptables -L INPUT -n | grep 'dpt:22'
 ```
 
 Check Palo Alto for any NAT or ACL affecting the SSH path.
@@ -97,11 +102,11 @@ getenforce  # confirm Enforcing or Permissive; do not change
 ## Monitoring
 
 ```bash
-systemctl status sshd
-journalctl -u sshd --since 1h | grep -iE 'accepted|failed|error'
+systemctl status sshd 2>/dev/null || systemctl status ssh
+journalctl -u sshd -u ssh --since '1 hour ago' | grep -iE 'accepted|failed|error'
 ss -lnt | grep ':22'
 # Auth log
-grep sshd /var/log/auth.log 2>/dev/null || journalctl -u sshd --since 1h | tail -20
+grep sshd /var/log/auth.log 2>/dev/null || journalctl -u sshd -u ssh --since '1 hour ago' -n 20
 ```
 
 Forward auth logs to Splunk via approved path. Verify at Quotient that SSH login succeeds with the scored credentials.
@@ -112,7 +117,8 @@ Back up SSH configuration before any change:
 
 ```bash
 BACKUP_DIR="/root/backup-ssh-$(date -u +%Y%m%d%H%M%S)"
-mkdir -p "$BACKUP_DIR"
+umask 077
+mkdir -m 700 "$BACKUP_DIR"
 cp -rp /etc/ssh "$BACKUP_DIR/"
 # Preserve authorized_keys if present
 find /home -name 'authorized_keys' -exec cp --parents {} "$BACKUP_DIR/" \; 2>/dev/null
@@ -126,9 +132,9 @@ Verify functional login (not just port open):
 
 ```bash
 # From Kali or any authorized client
-ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 <user>@<host> 'echo OK && whoami && hostname'
+ssh -o StrictHostKeyChecking=ask -o ConnectTimeout=5 <user>@<host> 'echo OK && whoami && hostname'
 # If key-based:
-ssh -i <keyfile> -o StrictHostKeyChecking=no <user>@<host> 'echo OK'
+ssh -i <keyfile> -o StrictHostKeyChecking=ask <user>@<host> 'echo OK'
 ```
 
 Test from both internal and public paths. Confirm Quotient shows successful SSH authentication.
@@ -137,7 +143,7 @@ Test from both internal and public paths. Confirm Quotient shows successful SSH 
 
 1. Restore config: `cp -rp "$BACKUP_DIR"/ssh /etc/`
 2. Validate: `sshd -t` (syntax check, no restart needed)
-3. Restart: `systemctl restart sshd`
+3. Reload the discovered unit: `systemctl reload sshd` on Rocky or `systemctl reload ssh` on Debian/Ubuntu, only after validation passes; keep the original session and console open.
 4. If key files were lost: restore from backup to the user's `.ssh/`
 5. Verify with `ssh <user>@<host> 'echo OK'`
 6. Record UTC time and residual exposure

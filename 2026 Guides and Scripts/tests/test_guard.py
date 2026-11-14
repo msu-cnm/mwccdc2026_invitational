@@ -77,6 +77,56 @@ class GuardTests(unittest.TestCase):
         # Enforce narrow scope: no forwarding/rp_filter/ICMP/service changes.
         self.assertEqual(set(g.SETTINGS), {'kernel.kptr_restrict','kernel.dmesg_restrict','fs.protected_hardlinks','fs.protected_symlinks'})
 
+    def test_firewall_plan_shape(self):
+        text = g.linux_nftables()['linux-hardening.nft']
+        self.assertIn('add table inet team_hardening', text)
+        self.assertIn('type filter hook input priority 0; policy accept;', text)
+        self.assertIn('ct state invalid drop', text)
+        self.assertIn('ct state established, related accept', text)
+        self.assertIn('tcp dport 22 ip saddr 172.20.240.0/24 accept', text)
+        self.assertIn('iifname != "lo" tcp dport 22 drop', text)
+        # Never touch ICMP, forwarding or service ports other than SSH mgmt.
+        self.assertNotIn('icmp', text.lower())
+        self.assertNotIn('ip_forward', text)
+        for port in ('80', '443', '8080', '1433', '25', '110', '143', '3389'):
+            self.assertNotIn('dport ' + port, text)
+
+    def test_firewall_rollback_removes_added_table(self):
+        rb = g.linux_nftables_rollback()['linux-rollback.nft']
+        self.assertIn('flush table inet team_hardening', rb)
+        self.assertIn('delete table inet team_hardening', rb)
+        # Rollback removes exactly the added table; no stale ruleset re-apply.
+        self.assertNotIn('add table', rb)
+
+    def test_firewall_host_profile(self):
+        text = g.linux_nftables(host_id='kali')['linux-hardening.nft']
+        self.assertIn('tcp dport 22 ip saddr 172.17.0.0/24 accept', text)
+        # Workstation profile excludes the Kali segment (host-specific policy).
+        text_ws = g.linux_nftables(host_id='ubuntu-workstation')['linux-hardening.nft']
+        self.assertNotIn('172.17.0.0/24', text_ws)
+
+    def test_firewall_rejects_bad_profiles_and_sources(self):
+        for host in ('no-such-host', '2022-ad', 'palo-alto'):
+            with self.assertRaises(ValueError):
+                g.linux_nftables(host_id=host)
+        for sources in ([], ['::/0'], ['172.17.0.0/24; flush ruleset']):
+            with self.assertRaises(ValueError):
+                g.linux_nftables(sources)
+
+    def test_firewall_cli_writes_file(self):
+        with tempfile.TemporaryDirectory() as t:
+            out = Path(t)/'hardening.nft'
+            with patch.object(sys, 'argv', ['guard', 'firewall', '--out', str(out)]), \
+                 patch.object(g.platform, 'system', return_value='Linux'), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                g.main()
+            self.assertIn('team_hardening', out.read_text())
+            self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+
+    def test_firewall_cli_rejects_apply(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke(['firewall', '--apply'], dict.fromkeys(g.SETTINGS, '0'))
+
     def test_topology_guide_coverage(self):
         topology = json.loads((ROOT/'config/topology.json').read_text())
         self.assertEqual(len(topology), 10)

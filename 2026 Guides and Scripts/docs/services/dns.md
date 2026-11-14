@@ -31,8 +31,7 @@ nslookup <record> 172.20.240.100
 DNS on Windows Server 2022 is typically installed as part of the AD Domain Services role. If missing:
 
 ```powershell
-Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
-# If DNS role was not included:
+# Install only the missing DNS role; do not promote/rebuild an existing domain
 Install-WindowsFeature DNS -IncludeManagementTools
 Start-Service DNS
 Set-Service DNS -StartupType Automatic
@@ -54,7 +53,7 @@ If zones are AD-integrated (stored in the directory), changes replicate via mult
 
 ```powershell
 # View zone properties
-Get-DnsServerZone | Select-Object Name, ZoneType, ReplicationScope
+Get-DnsServerZone | Select-Object ZoneName, ZoneType, ReplicationScope
 # Add/modify records (use only if portal requires)
 Add-DnsServerResourceRecordA -Name "test" -IPv4Address "172.20.240.100" -ZoneName "<domain>"
 ```
@@ -82,7 +81,6 @@ PAN-OS CLI options (discovery only):
 show running security-policy | match 172.20.240.100
 show session all filter destination 172.20.240.100 destination-port 53
 show interface ethernet1/2
-show zone
 ```
 
 GUI equivalent: Policies > Security, Monitor > Traffic, Network > Interfaces.
@@ -95,7 +93,7 @@ Get-Service DNS | Select-Object Status
 # Query statistics (requests, errors)
 Get-DnsServerStatistics -ComputerName .
 # Recent query log (if enabled)
-Get-EventLog System -Newest 20 -Source "DNS Server"
+Get-WinEvent -LogName 'DNS Server' -MaxEvents 20
 ```
 
 From a client:
@@ -134,7 +132,7 @@ dig @<AD_public_or_internal_ip> <expected_record> A +short
 dig @<AD_public_or_internal_ip> <expected_record> MX +short
 dig @<AD_public_or_internal_ip> <expected_record> CNAME +short
 # Reverse
-dig -x <ip> +short
+dig @<AD_public_or_internal_ip> -x <ip> +short
 ```
 
 Test from both internal and public paths if the scoring check uses the public address. Confirm Quotient shows correct DNS responses.

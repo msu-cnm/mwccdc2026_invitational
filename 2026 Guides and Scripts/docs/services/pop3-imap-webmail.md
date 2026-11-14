@@ -10,7 +10,7 @@ Confirm the actual mail stack before assuming Dovecot or any specific webmail fr
 
 ```bash
 systemctl list-units --type=service | grep -iE 'dovecot|cyrus|webmail|roundcube|rainloop'
-ss -lntu | grep -E ':110$|:143$|:995$|:993$'
+ss -lnt '( sport = :110 or sport = :143 or sport = :995 or sport = :993 )'
 dpkg-query -W | grep -iE 'dovecot|webmail|roundcube|rainloop|cyrus'
 ```
 
@@ -97,7 +97,7 @@ GUI equivalent: Policies > NAT, Policies > Security, Monitor > Traffic.
 ```bash
 systemctl status dovecot
 journalctl -u dovecot --since 1h | grep -iE 'login|auth|error'
-ss -lntu | grep -E ':110$|:143$|:995$|:993$'
+ss -lnt '( sport = :110 or sport = :143 or sport = :995 or sport = :993 )'
 # Webmail
 systemctl status roundcube 2>/dev/null || systemctl status apache2 2>/dev/null
 ```
@@ -110,11 +110,14 @@ Back up Dovecot configuration, mail location data, and webmail database before a
 
 ```bash
 BACKUP_DIR="/root/backup-mail-$(date -u +%Y%m%d%H%M%S)"
-mkdir -p "$BACKUP_DIR"
+umask 077
+mkdir -m 700 "$BACKUP_DIR"
 cp -rp /etc/dovecot "$BACKUP_DIR/"
-tar czf "$BACKUP_DIR/maildir.tar.gz" /var/mail /var/vmail 2>/dev/null
+# Substitute the existing mailbox root discovered with doveconf; quiesce writes first
+tar -czpf "$BACKUP_DIR/maildir.tar.gz" -C /var/mail .
+tar -tzf "$BACKUP_DIR/maildir.tar.gz" >/dev/null
 # Webmail database (discover actual DB)
-mysqldump roundcube > "$BACKUP_DIR/roundcube.sql" 2>/dev/null
+mysqldump --single-transaction -u <backup-user> -p roundcube > "$BACKUP_DIR/roundcube.sql"
 ```
 
 No VM snapshots available. Retain backups on a protected path; verify restore before the event.
@@ -124,21 +127,22 @@ No VM snapshots available. Retain backups on a protected path; verify restore be
 Verify functionally with the scored AD account:
 
 ```bash
-# IMAP (port 143 or 993)
+# IMAPS (993; port 143 requires IMAP4 + starttls instead)
 python3 -c "
-import imaplib, email
-m = imaplib.IMAP4_SSL('<host>', 993)
-m.login('<ad_user>', '<password>')
-typ, data = m.select('INBOX')
+import imaplib, ssl, getpass
+m = imaplib.IMAP4_SSL('<mail-fqdn>', 993, ssl_context=ssl.create_default_context(), timeout=10)
+m.login('<ad_user>', getpass.getpass())
+typ, data = m.select('INBOX', readonly=True)
+if typ != 'OK': raise RuntimeError('INBOX selection failed')
 print(typ, int(data[0]), 'messages')
 m.logout()
 "
 
-# POP3 (port 110 or 995)
+# POP3S (995; port 110 requires POP3 + stls instead)
 python3 -c "
-import poplib
-p = poplib.POP3_SSL('<host>', 995)
-p.user('<ad_user>'); p.pass_('password')
+import poplib, ssl, getpass
+p = poplib.POP3_SSL('<mail-fqdn>', 995, context=ssl.create_default_context(), timeout=10)
+p.user('<ad_user>'); p.pass_(getpass.getpass())
 print(len(p.list()[1]), 'messages')
 p.quit()
 "
@@ -154,8 +158,8 @@ Test from both internal and public paths. Confirm Quotient shows successful retr
 1. Restore Dovecot config: `cp -rp "$BACKUP_DIR"/dovecot /etc/`
 2. Validate: `doveconf -n` (prints effective config; check for errors)
 3. Restart: `systemctl restart dovecot`
-4. If mail data lost: `tar xzf "$BACKUP_DIR/maildir.tar.gz" -C /`
-5. If webmail DB corrupted: `mysql roundcube < "$BACKUP_DIR/roundcube.sql"`
+4. If mail data lost: `tar -xzpf "$BACKUP_DIR/maildir.tar.gz" -C /var/mail` (use the original discovered mailbox root)
+5. If webmail DB corrupted: `mysql -u <restore-user> -p roundcube < "$BACKUP_DIR/roundcube.sql"`
 6. Record UTC time and residual exposure.
 
 ## References

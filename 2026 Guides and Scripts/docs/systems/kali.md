@@ -30,9 +30,13 @@ python3 scripts/linux_guard.py harden
 sudo python3 scripts/linux_guard.py harden --apply --backup /root/kernel-before.json
 sudo python3 scripts/linux_guard.py rollback --backup /root/kernel-before.json
 sudo python3 scripts/linux_guard.py rollback --apply --backup /root/kernel-before.json
+# Firewall hardening (plan-only; operator applies with nft):
+python3 scripts/linux_guard.py firewall --host kali
 ```
 
 Harden adjusts only four runtime kernel protections. It does not persist across reboot. A repeat application with the same backup path fails safely; retain the original backup. Applications needing kernel diagnostics may be affected: test this host before event use. Assess is read-only; elevated assessment may expose more metadata. Snapshot output contains hashes and metadata, not file contents; protect it and compare against a reviewed earlier capture. It is a one-shot collector, not an automatic incident detector.
+
+**Firewall hardening:** use the [per-host hardening procedure](../hardening.md). Windows uses supported `RemoteAddress` ranges for the complement of the selected host's trusted IPv4 networks and explicitly blocks IPv6 SSH. Existing effective GPO or block rules can still prevent trusted SSH; test fresh connections. Other service ports are preserved.
 
 ## Monitoring and scoring verification
 

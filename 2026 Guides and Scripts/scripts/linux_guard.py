@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local assessment and reversible kernel hardening; no network/firewall changes."""
+"""Local assessment, reversible kernel controls and host-specific firewall plans."""
 import argparse
 import hashlib
 import json
@@ -14,6 +14,95 @@ import time
 # Deliberately exclude forwarding, reverse-path filtering, IPv6, SSH and services.
 SETTINGS = {"kernel.kptr_restrict": "2", "kernel.dmesg_restrict": "1",
             "fs.protected_hardlinks": "1", "fs.protected_symlinks": "1"}
+
+
+TABLE = 'team_hardening'
+CHAIN = 'team_input_harden'
+
+
+def load_host_profile(host_id, config_path=None):
+    """Load an explicit host profile; reject unknown or mismatched hosts."""
+    import ipaddress
+    path = Path(config_path) if config_path else Path(__file__).resolve().parent.parent / 'config' / 'host-firewall.json'
+    data = json.loads(path.read_text())
+    profile = data.get(host_id)
+    if not isinstance(profile, dict) or profile.get('platform') != 'linux':
+        raise ValueError('unknown or incompatible firewall host profile: ' + str(host_id))
+    sources = profile.get('trusted_ssh_sources')
+    if not isinstance(sources, list) or not sources:
+        raise ValueError('trusted_ssh_sources must be a nonempty list')
+    sources = [str(ipaddress.IPv4Network(c, strict=True)) for c in sources]
+    return sources
+
+
+def linux_nftables(trusted_ssrcs=None, host_id=None):
+    """Generate a reviewable nftables hardening add-on for one Linux host.
+
+    Conservative by design: it only drops invalid state and restricts SSH to
+    the trusted management/Kali networks for that host. It never rewrites
+    existing tables/chains, never changes routes, forwarding or any service
+    port other than SSH, and preserves established/related flow so
+    already-open sessions keep working.
+
+    Apply with ``nft -c -f`` (syntax check only, does not change state) then
+    ``nft -f``, after capturing a full ruleset backup with
+    ``nft list ruleset > nftables-backup.nft``. Rollback is the matching
+    ``linux-rollback.nft`` file (see ``linux_nftables_rollback``), which
+    removes exactly the table this plan added so the SSH restriction is fully
+    lifted.
+    """
+    if trusted_ssrcs is None:
+        trusted_ssrcs = load_host_profile(host_id) if host_id else ['172.20.240.0/24', '172.17.0.0/24']
+    import ipaddress
+    trusted_ssrcs = [str(ipaddress.IPv4Network(c, strict=True)) for c in trusted_ssrcs]
+    if not trusted_ssrcs:
+        raise ValueError('trusted SSH sources cannot be empty')
+    accept_lines = [
+        '    iifname != "lo" tcp dport 22 ip saddr %s accept' % cidr
+        for cidr in trusted_ssrcs
+    ]
+    lines = [
+        '# Linux hardening add-on (review before applying; back up first)',
+        '#   backup:   nft list ruleset > nftables-backup.nft',
+        '#   check:    nft -c -f linux-hardening.nft   (syntax check only, does not apply)',
+        '#   apply:    nft -f linux-hardening.nft',
+        '#   rollback: nft -f linux-rollback.nft       (removes table %s)' % TABLE,
+        '#   verify trusted access:   from a host in one of the trusted networks run: ssh <host> (must succeed)',
+        '#   verify untrusted denial: from a non-trusted source run: ssh <host> (must be refused/timeout)',
+        '',
+        'add table inet %s' % TABLE,
+        'table inet %s {' % TABLE,
+        '  chain %s {' % CHAIN,
+        '    type filter hook input priority 0; policy accept;',
+        '    ct state invalid drop',
+        '    ct state established, related accept',
+    ] + accept_lines + [
+        '    iifname != "lo" tcp dport 22 drop',
+        '  }',
+        '}',
+        '',
+    ]
+    return {'linux-hardening.nft': '\n'.join(lines)}
+
+
+def linux_nftables_rollback():
+    """Generate the matching rollback file: it deletes exactly the table this
+    plan added, so re-applying a ruleset backup (which would leave the new
+    table in place) is not needed and the SSH restriction is fully removed.
+
+    ``flush table`` then ``delete table`` require the table to exist: the
+    operator runs this after confirming the table exists (``nft list tables``).
+    """
+    lines = [
+        '# Linux hardening rollback (removes only the team_hardening table)',
+        '#   check:    nft -c -f linux-rollback.nft   (syntax check only)',
+        '#   apply:    nft -f linux-rollback.nft',
+        '',
+        'flush table inet %s' % TABLE,
+        'delete table inet %s' % TABLE,
+        '',
+    ]
+    return {'linux-rollback.nft': '\n'.join(lines)}
 
 
 def run(args):
@@ -87,12 +176,41 @@ def validate_backup(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['assess', 'harden', 'rollback'])
+    parser.add_argument('action', choices=['assess', 'harden', 'rollback', 'firewall'])
     parser.add_argument('--apply', action='store_true', help='explicitly allow changes')
     parser.add_argument('--backup', type=Path, help='new backup file for harden; existing file for rollback')
+    parser.add_argument('--out', type=Path, help='write the generated firewall ruleset to this file (firewall)')
+    parser.add_argument('--host', help='topology host id for per-host firewall profiles (firewall)')
     a = parser.parse_args()
     if platform.system() != 'Linux':
         parser.error('Linux required')
+    if a.action == 'firewall':
+        if a.apply or a.backup:
+            parser.error('firewall does not accept --apply or --backup')
+        files = linux_nftables(host_id=a.host)
+        files.update(linux_nftables_rollback())
+        if a.out:
+            out_path = Path(a.out)
+            if out_path.is_dir() or str(out_path).endswith((os.sep, '/')):
+                # Directory: write every generated file into it.
+                for name, text in files.items():
+                    p = out_path / name
+                    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, 'w') as f:
+                        f.write(text)
+                    print('Wrote %s' % p)
+            else:
+                # Single file path (original behaviour): write only the hardening ruleset.
+                p = out_path
+                fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, 'w') as f:
+                    f.write(files['linux-hardening.nft'])
+                print('Wrote %s' % p)
+        else:
+            for name, text in files.items():
+                print('=== %s ===' % name)
+                print(text)
+        return
     if a.action == 'assess':
         if a.apply or a.backup:
             parser.error('assess does not accept --apply or --backup')

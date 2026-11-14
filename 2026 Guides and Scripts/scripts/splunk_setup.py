@@ -179,13 +179,21 @@ def plan(host, receiver, port, index, method, extra_inputs=None):
                 # --input overrides the per-host defaults when given.
                 inputs = list(extra_inputs)
             files = linux_forwarder(receiver, port, index, inputs)
-            note = ('Deploy outputs.conf/inputs.conf under the forwarder etc/apps/<app>/local/, '
-                    'then restart the universal forwarder service.')
+            note = ('Deploy under the forwarder (use its discovered install path):\n'
+                    '  sudo mkdir -p /opt/splunkforwarder/etc/apps/team_collection/local\n'
+                    '  sudo cp outputs.conf inputs.conf /opt/splunkforwarder/etc/apps/team_collection/local/\n'
+                    '  # Follow Step 1 of the Linux guide to discover and verify the unit and owner.\n'
+                    '  # Set UNIT to that exact unit in this shell before restarting:\n'
+                    '  sudo systemctl restart "${UNIT:?Set UNIT using Step 1 discovery first}"\n'
+                    'then verify per docs/splunk-data-sources.md "Linux forwarder" (btool, forward-server, splunkd.log).')
     elif host['platform'] == 'windows':
         files = windows_forwarder(receiver, port, index)
-        note = ('Local universal-forwarder collection: deploy outputs.conf/inputs.conf under '
-                'C:\\Program Files\\SplunkUniversalForwarder\\etc\\apps\\<app>\\local\\ and '
-                'restart the forwarder. WEF is a separate path and is not generated here.')
+        note = ('Local universal-forwarder collection (elevated PowerShell):\n'
+                '  $d = "C:\\Program Files\\SplunkUniversalForwarder\\etc\\apps\\team_collection\\local"\n'
+                '  New-Item -ItemType Directory -Force -Path $d | Out-Null\n'
+                '  Copy-Item outputs.conf, inputs.conf -Destination $d -Force\n'
+                '  Restart-Service SplunkForwarder\n'
+                'then verify per docs/splunk-data-sources.md "Windows forwarder". WEF is a separate path and is not generated here.')
     elif host['platform'] == 'network':
         if host['id'] == 'vyos':
             files = vyos_syslog(receiver, port)

@@ -10,7 +10,7 @@ Confirm the actual web stack — do not assume Apache/nginx paths. Use these rea
 
 ```bash
 systemctl list-units --type=service | grep -E 'httpd|nginx|apache'
-ss -lntu | grep -E ':80$|:443$'
+ss -lnt '( sport = :80 or sport = :443 )'
 rpm -qa | grep -iE 'httpd|nginx|apache'
 ```
 
@@ -80,8 +80,10 @@ Verify service health beyond open ports. Confirm content matches portal expectat
 
 ```bash
 systemctl status <service_name>
-curl --insecure http://localhost/ && curl --insecure https://localhost/
-ss -lntu | grep -E ':80$|:443$'
+# Preserve Host header and TLS SNI while connecting locally
+curl --fail-with-body --connect-timeout 5 --max-time 15 \
+  --cacert /path/to/lab-ca.pem --resolve '<web-fqdn>:443:127.0.0.1' 'https://<web-fqdn>/<expected-path>'
+ss -lnt '( sport = :80 or sport = :443 )'
 ```
 
 Log locations: nginx `/var/log/nginx/`, httpd `/var/log/httpd/`. Check `/etc/logrotate.d/` for rotation. Ingest with approved forwarder/syslog path; no default access-log schema assumed. Verify at https://quotient.ccdc.events/.
@@ -91,20 +93,28 @@ Log locations: nginx `/var/log/nginx/`, httpd `/var/log/httpd/`. Check `/etc/log
 Back up configuration, document root, certificates, and database schema/data. Use protected paths with timestamps. No VM snapshots available:
 
 ```bash
-BACKUP_DIR="/root/backup-$(date -u +%Y%m%d%H%M%S)"
-mkdir -p "$BACKUP_DIR"
-cp -r /etc/nginx/conf.d/* "$BACKUP_DIR/" 2>/dev/null
-cp -r /var/www/html/* "$BACKUP_DIR/"
-cp -r /etc/pki/tls/certs/* "$BACKUP_DIR/"
-mysqldump --all-databases > "$BACKUP_DIR/db-backup.sql" 2>/dev/null
+# Run as root; select only the discovered server's config directory
+umask 077
+BACKUP_DIR="/root/backup-web-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -m 700 "$BACKUP_DIR"
+WEB_CONFIG=/etc/nginx
+# For httpd set WEB_CONFIG=/etc/httpd instead
+cp -a "$WEB_CONFIG" "$BACKUP_DIR/"
+# Include hidden content, ownership and the discovered TLS key/certificate files
+tar --acls --xattrs --selinux -czpf "$BACKUP_DIR/html.tar.gz" -C /var/www/html .
+cp -a /etc/pki/tls "$BACKUP_DIR/"
+tar -tzf "$BACKUP_DIR/html.tar.gz" >/dev/null
 ```
+
+Replace `/var/www/html` with the actual document root. Quiesce application writes for a consistent copy. Back up the actual database using its native tool: use the [MSSQL procedure](mssql.md#backup) for a SQL Server backend. `mysqldump` applies only to a discovered MySQL/MariaDB backend, not MSSQL. Include application configuration and any certificate/key paths outside `/etc/pki/tls`.
 
 ## Usage and scoring verification
 
 Verify functionally using the exact URL/path from the portal. Check HTTP status and content. Test from internal (172.20.240.10) and public egress (172.25.(20+team).10). Confirm Quotient at https://quotient.ccdc.events/.
 
 ```bash
-curl -I https://<portal_url>/ && curl https://<portal_url>/
+curl --cacert /path/to/lab-ca.pem --connect-timeout 5 --max-time 15 \
+  --fail-with-body 'https://<web-fqdn>/<expected-path>'
 curl -I https://quotient.ccdc.events/
 ```
 
@@ -115,7 +125,7 @@ Check HTTP status (200/301/302/404, etc.) and verify response content matches po
 If a change breaks the service, use saved configuration backup and native validation.
 
 1. Validate: `nginx -t` (tests the full main configuration, including conf.d) or `apachectl configtest`
-2. Restore if invalid: `cp "$BACKUP_DIR"/<config> /etc/nginx/conf.d/`
+2. Restore the selected configuration tree: `cp -a "$BACKUP_DIR/nginx/." /etc/nginx/` for nginx, or `cp -a "$BACKUP_DIR/httpd/." /etc/httpd/` for httpd. Validate the restored full configuration before reloading.
 3. Reload/restart: `systemctl reload <service>`
 4. If content corrupted: restore the preserved document-root directory, including hidden files and ownership, then validate content
 5. Record UTC time and residual exposure.

@@ -10,7 +10,7 @@ Read-only commands on candidate hosts:
 ss -lntu | grep ':21'
 systemctl list-units --type=service | grep -iE 'vsftpd|proftpd|pure-ftpd|ftp'
 rpm -qa | grep -i ftp
-dpkg-query -W -f='${Package}' | grep -i ftp
+dpkg-query -W -f='${Package}\n' | grep -i ftp
 ```
 
 Check Palo Alto NAT rules for port 21 forwarding and passive range. Plausible candidates: Rocky Ecom (upload/content) or Ubuntu Email (attachment relay). Host is discovered via portal assignment and service presence.
@@ -64,19 +64,21 @@ Passive port range MUST match firewall/NAT rules. Check NAT configuration for al
 
 User accounts and chroot jail:
 
-```bash
-vsftpd.conf entries:
-# user_list_enable=YES  # chroot to home directory
+```conf
+# Optional chroot, only after verifying the existing scored layout
+chroot_local_user=YES
 # local_root=/var/ftp/<user>
 ```
+
+`userlist_enable` controls login allow/deny lists, not chroot. Preserve the existing list and `userlist_deny` behavior. A chroot root normally must not be writable by the FTP user; use an owned writable subdirectory and test the existing upload workflow before enabling chroot.
 
 TLS (FTPS) if required:
 
 ```bash
 ssl_enable=YES
-ssl_ciphers=ECDHE-RSA-AES256-GCM-SHA56:ECDHE-RSA-AES128-GCM-SHA256
-ssl_certificate_file=/etc/ssl/certs/ftp.crt
-ssl_private_key_file=/etc/ssl/private/ftp.key
+ssl_ciphers=HIGH:!aNULL:!MD5
+rsa_cert_file=/etc/ssl/certs/ftp.crt
+rsa_private_key_file=/etc/ssl/private/ftp.key
 ```
 
 Connection tracking for data connections: Ensure firewall allows established/related connections on passive ports.
@@ -96,7 +98,7 @@ FTP transfer logs (auth success/failure):
 
 ```bash
 grep 'vsftpd' /var/log/auth.log
-grep 'Accepted|Failed' /var/log/secure | grep ftp
+grep -E 'Accepted|Failed' /var/log/secure | grep ftp
 ```
 
 Disk usage on data directories:
@@ -120,19 +122,20 @@ curl --user '<user>' 'ftp://<host>/'
 
 Backup FTP configuration (vsftpd.conf, user accounts, chroot directory structure):
 
-```bash
-# Timestamped protected paths
-mkdir /backup/ftp-$(date +%Y%m%d-%H%M%S)
-cp -r /etc/vsftpd.conf /backup/ftp-*/
-cp -r /var/ftp/ /backup/ftp-*/
-cp -r /var/lib/ftp/ /backup/ftp-*/
-```
-
-Backup file data in scored directories:
+Run as root. Discover the configured file with `systemctl cat vsftpd`: Debian/Ubuntu usually uses `/etc/vsftpd.conf`, Rocky `/etc/vsftpd/vsftpd.conf`. Set `FTP_CONFIG` and `FTP_ROOT` to the actual configuration and scored data root:
 
 ```bash
-cp -r /var/ftp/scored/* /backup/ftp-*/scored/
+umask 077
+BACKUP_DIR="/root/backup-ftp-$(date -u +%Y%m%dT%H%M%SZ)"
+FTP_CONFIG=/etc/vsftpd.conf
+FTP_ROOT=/var/ftp
+mkdir -m 700 "$BACKUP_DIR"
+cp -a "$FTP_CONFIG" "$BACKUP_DIR/vsftpd.conf"
+tar -czpf "$BACKUP_DIR/ftp-data.tar.gz" -C "$FTP_ROOT" .
+tar -tzf "$BACKUP_DIR/ftp-data.tar.gz" >/dev/null
 ```
+
+Include referenced user-list, PAM and TLS files separately if used. File backup does not recreate local accounts or AD integration. Quiesce writes for a consistent data copy; retain a protected off-host copy.
 
 **No VM snapshots.** Use protected paths with timestamps.
 
@@ -154,13 +157,13 @@ Test from internal and public paths. Confirm Quotient shows correct files.
 
 Rollback steps:
 
-Select the intended backup before restoring. Restarting briefly interrupts FTP;
+Set `BACKUP_DIR`, `FTP_CONFIG`, and `FTP_ROOT` to the single selected backup and the original paths before restoring. Restarting briefly interrupts FTP;
 perform it in the coordinated recovery window. vsftpd has no standalone syntax
 test flag: check startup status and the journal after restoring configuration.
 
 ```bash
 # Restore configuration
-cp /backup/ftp-<timestamp>/vsftpd.conf /etc/vsftpd.conf
+cp -a "$BACKUP_DIR/vsftpd.conf" "$FTP_CONFIG"
 
 # Restart with the restored configuration and verify startup
 systemctl restart vsftpd && systemctl is-active vsftpd
@@ -174,7 +177,7 @@ from the required scoring path; active status alone does not verify FTP access.
 If file data is corrupted, restore from backup:
 
 ```bash
-cp -r /backup/ftp-*/scored/* /var/ftp/scored/
+tar -xzpf "$BACKUP_DIR/ftp-data.tar.gz" -C "$FTP_ROOT"
 ```
 
 Verify NAT rules for passive range are intact. Record UTC time of recovery action.

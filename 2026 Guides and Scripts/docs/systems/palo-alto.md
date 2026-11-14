@@ -31,7 +31,6 @@ show interface all
 show routing route
 show running nat-policy
 show running security-policy
-show zone
 show session info
 show system resources
 ```
@@ -42,13 +41,13 @@ For a reviewed configuration edit, use configuration mode (`#`) with a tested co
 
 ```text
 configure
-show config diff
+run show config diff
 validate full
 ```
 
-Inspect the returned validation job from operational mode with `show jobs id JOB_ID` (replace `JOB_ID`). Validation does not activate changes or test connectivity. After reviewing the diff and validation result, `commit` in configuration mode activates the candidate; check its job result and all scored workflows. See the [firewall service guide backup procedure](../services/vyos-palo-alto.md#backup) before proceeding.
+Inspect the returned validation job from configuration mode with `run show jobs id JOB_ID` (replace `JOB_ID`), or `show jobs id JOB_ID` at the operational prompt. `show config diff` is operational; use its `run` prefix while in configuration mode. Validation does not activate changes or test connectivity. After reviewing the diff and validation result, `commit` in configuration mode activates the candidate; check its job result and all scored workflows. See the [firewall service guide backup procedure](../services/vyos-palo-alto.md#backup) before proceeding.
 
-To restore a saved named configuration, use `load config from SAVED_FILE.xml` in configuration mode, review `show config diff`, run `validate full`, inspect the job, then `commit`. Substitute the actual known-good file; loading alone changes only the candidate. This replaces configuration and can interrupt access, so coordinate with service owners and recheck management, NAT, routes and scoring afterward.
+To restore a saved named configuration, use `load config from SAVED_FILE.xml` in configuration mode, review `run show config diff`, run `validate full`, inspect the job, then `commit`. Substitute the actual known-good file; loading alone changes only the candidate. This replaces configuration and can interrupt access, so coordinate with service owners and recheck management, NAT, routes and scoring afterward.
 
 ## Scripts and reversible changes
 
@@ -120,3 +119,7 @@ Official sources opened and checked **2026-11-13**; recheck live advisories befo
 - [PAN-OS 11.0 upgrade-path documentation](https://docs.paloaltonetworks.com/pan-os/11-0/pan-os-upgrade/upgrade-pan-os/upgrade-the-firewall-pan-os/determine-the-upgrade-path).
 - [Vendor software upgrade and configuration export workflow](https://docs.paloaltonetworks.com/vm-series/upgrade/upgrade-pan-os).
 - [Operations: configuration and device-state exports](https://docs.paloaltonetworks.com/ngfw/help/10-1/device/device-setup-operations); use actual installed-version UI/help for platform support.
+
+## Scripted management restriction
+
+Generate `python3 scripts/panos_guard.py plan --host palo-alto` and follow the [hardening procedure](../hardening.md). This restricts all services on the dedicated MGT interface at 172.20.240.200 using permitted addresses. It does not create transit security rules. Console access and a saved clean candidate are required; validate, commit, then test new connections.

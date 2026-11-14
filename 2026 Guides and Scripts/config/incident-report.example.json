@@ -1,0 +1,14 @@
+{
+  "incident_id": "EXAMPLE-REPLACE",
+  "reported_utc": "REPLACE with actual UTC timestamp",
+  "timeline": [{"utc": "REPLACE with actual UTC timestamp", "description": "REPLACE with observed facts and evidence references"}],
+  "evidence": [{"source": "REPLACE with protected evidence filename", "event_id": "REPLACE with event ID or not available", "hash": "REPLACE with actual SHA-256 of evidence file"}],
+  "source_address": "REPLACE or unknown",
+  "destination_address": "REPLACE or unknown",
+  "port": 443,
+  "affected_services": ["REPLACE with confirmed affected service"],
+  "impact": "REPLACE with observed impact; distinguish inference from fact",
+  "containment": "REPLACE with actions, operator, time and approval reference, or none taken",
+  "recovery": "REPLACE with recovery actions and functional check results, or pending",
+  "scoring_verification": "REPLACE with portal evidence and time, or unverified"
+}

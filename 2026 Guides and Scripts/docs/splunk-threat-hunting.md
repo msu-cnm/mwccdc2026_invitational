@@ -1,4 +1,4 @@
-# Splunk threat hunting and monitoring
+ # Splunk threat hunting and monitoring
 
 Start collection with the [per-host Splunk data-source setup](splunk-data-sources.md), including receiver configuration, forwarder inputs, appliance syslog, test events and alerts.
 

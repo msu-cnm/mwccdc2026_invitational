@@ -1,0 +1,123 @@
+{
+  "_comment": "Host-specific management restrictions; review actual operator and official access sources before application. candidate_services are dependency notes, not enforced allowlists. Linux/Windows preserve non-SSH ports; VyOS protects selected-interface IPv4 SSH; PAN-OS restricts all dedicated MGT services. See docs/hardening.md.",
+  "rocky-ecom": {
+    "platform": "linux",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24",
+      "172.17.0.0/24"
+    ],
+    "candidate_services": [
+      "HTTP (80)",
+      "HTTPS (443)",
+      "FTP (21)"
+    ],
+    "note": "HTTP/HTTPS (and FTP) are candidate scored services; never close them. Restrict SSH mgmt only."
+  },
+  "ubuntu-email": {
+    "platform": "linux",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24",
+      "172.17.0.0/24"
+    ],
+    "candidate_services": [
+      "SMTP (25)",
+      "POP3 (110)",
+      "IMAP (143)",
+      "webmail (80/443)"
+    ],
+    "note": "SMTP/POP3/IMAP/webmail are candidate scored services; never close them. Restrict SSH mgmt only."
+  },
+  "debian-splunk": {
+    "platform": "linux",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24",
+      "172.17.0.0/24"
+    ],
+    "candidate_services": [
+      "Splunk web (443)",
+      "Splunk query endpoint (8089)"
+    ],
+    "note": "Splunk query endpoint is a candidate scored service; never close it. Restrict SSH mgmt only."
+  },
+  "kali": {
+    "platform": "linux",
+    "trusted_ssh_sources": [
+      "172.17.0.0/24",
+      "172.20.240.0/24"
+    ],
+    "candidate_services": [],
+    "note": "Kali is on 172.17.0.0/24 and is a trusted operator host; keep it reachable for SSH."
+  },
+  "ubuntu-workstation": {
+    "platform": "linux",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24"
+    ],
+    "candidate_services": [
+      "web browsing (80/443) via shared egress"
+    ],
+    "note": "Workstation; SSH is candidate-only. Restrict SSH mgmt to the management LAN."
+  },
+  "2022-ad": {
+    "platform": "windows",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24",
+      "172.17.0.0/24"
+    ],
+    "candidate_services": [
+      "DNS (53)",
+      "AD/LDAP (389/636)",
+      "Kerberos (88)",
+      "SMB (445)"
+    ],
+    "note": "DNS and AD services are candidate scored dependencies; never close them. Restrict SSH mgmt only."
+  },
+  "2019-mssql": {
+    "platform": "windows",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24",
+      "172.17.0.0/24"
+    ],
+    "candidate_services": [
+      "SQL Server (1433)"
+    ],
+    "note": "SQL Server is a candidate scored service; never close it. Restrict SSH mgmt only."
+  },
+  "windows11-workstation": {
+    "platform": "windows",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24"
+    ],
+    "candidate_services": [
+      "web browsing (80/443) via shared egress"
+    ],
+    "note": "Workstation; SSH is candidate-only. Restrict SSH mgmt to the management LAN."
+  },
+  "vyos": {
+    "platform": "vyos",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24",
+      "172.17.0.0/24"
+    ],
+    "candidate_services": [
+      "routing/forwarding",
+      "NAT",
+      "ICMP"
+    ],
+    "internal_interface": "eth2",
+    "note": "Restrict SSH on the internal-facing interface only; never touch NAT, routes, forwarding or ICMP."
+  },
+  "palo-alto": {
+    "platform": "panos",
+    "trusted_ssh_sources": [
+      "172.20.240.0/24"
+    ],
+    "candidate_services": [
+      "existing security rules",
+      "NAT mappings",
+      "routes",
+      "management (172.20.240.200)"
+    ],
+    "note": "Dedicated MGT permitted-address restriction for all management services, not a transit security rule. Requires console and baseline snapshot. Data-interface management profiles are separate."
+  }
+}
