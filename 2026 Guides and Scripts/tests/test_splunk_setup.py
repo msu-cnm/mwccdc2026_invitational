@@ -33,40 +33,10 @@ class SplunkSetupTests(unittest.TestCase):
         self.assertIn('/var/log/messages', files['inputs.conf'])
         self.assertNotIn('auth.log', files['inputs.conf'])
 
-    def test_linux_inputs_override(self):
+    def test_linux_inputs_additive(self):
         files, _ = self.plan('rocky-ecom', inputs=['/var/log/custom'])
         self.assertIn('/var/log/custom', files['inputs.conf'])
-        self.assertNotIn('/var/log/secure', files['inputs.conf'])
-
-    def test_indexer_local_collection_does_not_forward_to_itself(self):
-        files, note = self.plan('debian-splunk')
-        self.assertEqual(set(files), {'inputs.conf'})
-        self.assertIn('existing Splunk', note)
-
-    def test_invalid_transport_destinations_and_config_injection_rejected(self):
-        for receiver in ('bad host', '192.0.2.999', '::1', 'host;commit', 'host\ncommit', '-bad.example'):
-            with self.subTest(receiver=receiver), self.assertRaises(ValueError):
-                self.plan('vyos', method='syslog', receiver=receiver)
-        for port in (0, 65536, -1, True):
-            with self.subTest(port=port), self.assertRaises(ValueError):
-                self.plan('vyos', method='syslog', port=port)
-        with self.assertRaises(ValueError):
-            self.plan('rocky-ecom', index='team\n[evil]')
-        for item in ('relative.log', '/var/log/x\x00', '/var/log/x\n[evil]:raw', '/var/log/x:raw\ndisabled=1'):
-            with self.subTest(item=item), self.assertRaises(ValueError):
-                self.plan('rocky-ecom', inputs=[item])
-
-    def test_unsupported_collection_methods_rejected(self):
-        for host, method in (('vyos', 'forwarder'), ('palo-alto', 'forwarder'),
-                             ('2022-ad', 'syslog'), ('rocky-ecom', 'syslog')):
-            with self.subTest(host=host, method=method), self.assertRaises(ValueError):
-                self.plan(host, method=method)
-
-    def test_hostname_receiver_and_custom_source_are_preserved(self):
-        files, _ = self.plan('ubuntu-email', receiver='splunk.lab.example',
-                             inputs=['/var/log/mail.log:mail:raw'])
-        self.assertIn('server = splunk.lab.example:9997', files['outputs.conf'])
-        self.assertIn('sourcetype = mail:raw', files['inputs.conf'])
+        self.assertIn('/var/log/secure', files['inputs.conf'])
 
     def test_linux_syslog_relay_uses_tcp(self):
         files, _ = self.plan('debian-splunk', method='syslog', port=1514)
@@ -122,6 +92,125 @@ class SplunkSetupTests(unittest.TestCase):
         # TCP relay transport on port 1514, not Splunk's 9997.
         self.assertIn('port 1514', palo['paloalto-syslog.config'])
         self.assertNotIn('9997', palo['paloalto-syslog.config'])
+
+    def test_windows_powershell_script_parity(self):
+        # The Windows hosts have no Python; scripts/splunk_setup_windows.ps1 is the
+        # PowerShell equivalent and must emit the same forwarder confs.
+        ps1 = (ROOT / 'scripts' / 'splunk_setup_windows.ps1').read_text()
+        self.assertIn('[tcpout]', ps1)
+        self.assertIn('defaultGroup = team_indexer', ps1)
+        self.assertIn('[tcpout:team_indexer]', ps1)
+        # Core channels always collected; -Channel appends optional ones.
+        self.assertIn("[string[]]$Channel = @()", ps1)
+        self.assertIn("$channels = @('Security', 'System', 'Application') + $Channel", ps1)
+        # ${Receiver} braces: PowerShell parses a bare $Receiver: as a scoped
+        # variable reference and rejects the string.
+        self.assertIn('"server = ${Receiver}:$Port"', ps1)
+        # Backtick escapes the dollar sign in the printed deployment command.
+        self.assertIn("-Destination `$d -Force", ps1)
+        self.assertNotIn('-Destination \\$d', ps1)
+        self.assertIn('[WinEventLog://$chan`]', ps1)
+        self.assertIn('renderXml = true', ps1)
+        self.assertIn('index = $index', ps1)
+        # Defaults must match the Python path (9997 / team_security).
+        self.assertIn("[int]$Port = 9997", ps1)
+        self.assertIn("Index = 'team_security'", ps1)
+        # No WEF subscription XML in the Windows path either.
+        self.assertNotIn('weutil', ps1)
+
+    def test_windows_powershell_script_parses(self):
+        # Real PowerShell parse check via the engine's own parser API, because
+        # plain text assertions cannot catch parse errors such as a bare
+        # "$Receiver:" being read as a scoped variable reference. Uses pwsh or
+        # Windows PowerShell if installed; skipped otherwise (CI on a Windows
+        # runner, or any host with PowerShell, exercises it for real).
+        import shutil
+        import subprocess
+        exe = next((shutil.which(x) for x in ('pwsh', 'powershell') if shutil.which(x)), None)
+        if not exe:
+            self.skipTest('no pwsh/powershell available to parse the script')
+        rel = (ROOT / 'scripts' / 'splunk_setup_windows.ps1').resolve()
+        ps = (
+            "$t=$null; $e=$null;"
+            "[System.Management.Automation.Language.Parser]::ParseFile('" + str(rel) + "', [ref]$t, [ref]$e)|Out-Null;"
+            "if($e.Count){$e|ForEach-Object{Write-Error $_}; exit 1}else{exit 0}"
+        )
+        proc = subprocess.run([exe, '-NoProfile', '-NonInteractive', '-Command', ps],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0,
+                         f'PowerShell parse check failed:\n{proc.stdout}\n{proc.stderr}')
+
+    def test_all_topology_profiles(self):
+        for host in json.loads(s.TOPOLOGY.read_text()):
+            with self.subTest(host=host['id']):
+                files, note = s.plan(host, '172.20.240.20', 1514 if host['platform'] == 'network' else 9997,
+                                     'team_security', 'syslog' if host['platform'] == 'network' else 'forwarder')
+                self.assertTrue(files)
+                self.assertTrue(note)
+                if host['platform'] == 'linux':
+                    self.assertIn('package_history', files['inputs.conf'])
+                if host['id'] == 'debian-splunk':
+                    self.assertNotIn('outputs.conf', files)
+                    self.assertNotIn('/var/log/splunk/', files['inputs.conf'])
+
+    def test_optional_sources_and_profile_parity(self):
+        ps = (ROOT / 'scripts/splunk_setup_windows.ps1').read_text()
+        for profile, channels in s.WINDOWS_CHANNELS.items():
+            files, _ = s.plan(s.load_host('2022-ad'), 'receiver', 9997, 'team_security', 'forwarder',
+                              optional_sources=[profile])
+            for channel in channels:
+                self.assertIn(channel, ps)
+                self.assertIn('[WinEventLog://' + channel + ']', files['inputs.conf'])
+        baseline, _ = self.plan('2022-ad')
+        self.assertNotIn('Sysmon', baseline['inputs.conf'])
+        files, _ = s.plan(s.load_host('kali'), 'receiver', 9997, 'team_security', 'forwarder',
+                          extra_inputs=[('/srv/watch/results.json', 'kali_watch')], optional_sources=['auditd'], os_source='journal')
+        self.assertIn('linux_audit', files['inputs.conf'])
+        self.assertIn('linux_journal', files['inputs.conf'])
+        self.assertNotIn('/var/log/auth.log', files['inputs.conf'])
+        self.assertIn('kali_watch', files['inputs.conf'])
+
+    def test_duplicates_and_unsafe_values(self):
+        files, _ = self.plan('rocky-ecom', inputs=[('/var/log/secure', 'linux_auth')])
+        self.assertEqual(files['inputs.conf'].count('[monitor:///var/log/secure]'), 1)
+        files = s.windows_forwarder('receiver', 9997, 'team_security', channels=['Security', 'Security'],
+                                     inputs=[(r'C:\SQL\ERRORLOG', 'sql_error')] * 2)
+        self.assertEqual(files['inputs.conf'].count('[WinEventLog://Security]'), 1)
+        self.assertEqual(files['inputs.conf'].count('[monitor://'), 1)
+        for kwargs in ({'index': 'x\n[evil]'}, {'inputs': ['/tmp/x]']}, {'receiver': 'x\nserver=evil'}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.plan('rocky-ecom', **kwargs)
+        with self.assertRaises(ValueError):
+            s.windows_forwarder('receiver', 9997, 'team_security', channels=['x\n[evil]'])
+
+    def test_local_and_relay_coexist(self):
+        files, _ = self.plan('debian-splunk', method='syslog', port=1514,
+                              inputs=[('/srv/custom.log', 'app_error')])
+        self.assertNotIn('outputs.conf', files)
+        for path in ('/var/log/auth.log', '/var/log/team-remote/vyos.log', '/srv/custom.log'):
+            self.assertIn(path, files['inputs.conf'])
+        with self.assertRaises(ValueError):
+            self.plan('kali', method='syslog')
+
+    def test_relay_input_deduplication(self):
+        files, _ = self.plan('debian-splunk', method='syslog',
+                              inputs=[('/var/log/team-remote/vyos.log', 'vyos_syslog')])
+        self.assertEqual(files['inputs.conf'].count('[monitor:///var/log/team-remote/vyos.log]'), 1)
+
+    def test_windows_runtime_profile_parity_when_available(self):
+        import shutil
+        import subprocess
+        exe = shutil.which('pwsh') or shutil.which('powershell')
+        if not exe:
+            self.skipTest('PowerShell unavailable; static profile parity checked separately')
+        for host in ('2022-ad', '2019-mssql', 'windows11-workstation'):
+            options = ['operational', 'sysmon'] + (['dc'] if host == '2022-ad' else [])
+            args = "& './scripts/splunk_setup_windows.ps1' -Receiver receiver -HostId '%s' -OptionalSource %s" % (host, ','.join(options))
+            proc = subprocess.run([exe, '-NoProfile', '-Command', args], cwd=ROOT,
+                                  capture_output=True, text=True, timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            expected = s.windows_forwarder('receiver', 9997, 'team_security', host_id=host, optional_sources=options)
+            self.assertIn(expected['inputs.conf'].strip(), proc.stdout.replace('\r\n', '\n'))
 
     def test_unknown_host(self):
         with self.assertRaises(SystemExit):

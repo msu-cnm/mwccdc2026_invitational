@@ -65,6 +65,37 @@ class GuideTests(unittest.TestCase):
                 self.assertIn('systems/' + host['id'] + '.md', index)
         self.assertIn('test_guides.py', (DOCS / 'validation.md').read_text())
 
+    def test_collection_profiles_and_monitoring_contract(self):
+        collection = (DOCS / 'splunk-data-sources.md').read_text()
+        hunting = self.shared.read_text()
+        query = (DOCS / 'services/splunk-query.md').read_text()
+        for host in self.inventory:
+            self.assertIn('`' + host['id'] + '`', collection)
+        for value in ('--optional-source', '--os-source journal', '-HostId', '-InputPath',
+                      'SQLAGENT.OUT', 'kali_watch', 'LINE_BREAKER', 'No self-forwarding'):
+            self.assertIn(value, collection)
+        for value in ('inputlookup expected_sources.csv', 'isnull(last_seen)',
+                      'by host source', 'passes{}', 'pass_time_utc', 'checks{}',
+                      'earliest=-24h latest=-2m'):
+            self.assertIn(value, hunting)
+        self.assertNotIn('index=REPLACE_', hunting)
+        for value in ('--cacert', "--user '<user>'", 'latest=-2m', 'team_security',
+                      'secret store', 'zero events'):
+            self.assertIn(value, query)
+        self.assertNotIn('curl -sk', query)
+
+    def test_kali_activation_and_storage_contract(self):
+        text = (DOCS / 'kali-operations.md').read_text()
+        headings = re.findall(r'^## (.+)$', without_fences(text), re.M)
+        self.assertEqual(len(headings), len(set(headings)))
+        self.assertNotIn('HTTP checks are **independent**', text)
+        self.assertNotIn('https_checks', text)
+        for value in ('WATCH_SCOPE=public', "cfg['http_checks'] =", 'umask 077',
+                      'install -d -m 0700', 'mktemp', 'mv --', 'SSL_CERT_FILE=',
+                      'no UDP or ICMP checks', 'exits 2'):
+            self.assertIn(value, text)
+        self.assertIn('splunk-data-sources.md#kali-nested-json-result-ingestion', text)
+
     def test_relative_markdown_link_targets(self):
         # Scope is the documentation changed by this task; ignore fenced examples.
         service_docs = sorted((DOCS / 'services').glob('*.md'))

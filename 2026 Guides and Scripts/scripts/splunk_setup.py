@@ -38,15 +38,63 @@ def load_host(host_id):
 
 # --- Linux ---------------------------------------------------------------
 
-# Per-host log paths and sourcetypes. Rocky uses secure/messages; Debian/Ubuntu
-# use auth.log/syslog. Add service-specific inputs with --input path:sourcetype.
+# Conventional candidates: absent files produce no events. Confirm daemon settings,
+# permissions and rotation; never infer a service assignment from a filename.
+DEBIAN_INPUTS = [('/var/log/auth.log', 'linux_auth'), ('/var/log/syslog', 'linux_syslog'),
+                 ('/var/log/apt/history.log', 'package_history'), ('/var/log/dpkg.log', 'package_history')]
 LINUX_INPUTS = {
-    'rocky-ecom': [('/var/log/secure', 'linux_auth'), ('/var/log/messages', 'linux_syslog')],
-    'ubuntu-email': [('/var/log/auth.log', 'linux_auth'), ('/var/log/syslog', 'linux_syslog')],
-    'debian-splunk': [('/var/log/auth.log', 'linux_auth'), ('/var/log/syslog', 'linux_syslog')],
-    'ubuntu-workstation': [('/var/log/auth.log', 'linux_auth'), ('/var/log/syslog', 'linux_syslog')],
-    'kali': [('/var/log/auth.log', 'linux_auth'), ('/var/log/syslog', 'linux_syslog')],
+    'rocky-ecom': [('/var/log/secure', 'linux_auth'), ('/var/log/messages', 'linux_syslog'),
+                   ('/var/log/dnf.log', 'package_history'), ('/var/log/dnf.rpm.log', 'package_history'),
+                   ('/var/log/httpd/*access_log', 'web_access'), ('/var/log/httpd/*error_log', 'app_error'),
+                   ('/var/log/nginx/access.log', 'web_access'), ('/var/log/nginx/error.log', 'app_error'),
+                   ('/var/log/vsftpd.log', 'ftp_log'), ('/var/log/xferlog', 'ftp_log')],
+    'ubuntu-email': DEBIAN_INPUTS + [('/var/log/mail.log', 'mail_log'),
+                   ('/var/log/dovecot.log', 'mail_log'), ('/var/log/apache2/*access.log', 'web_access'),
+                   ('/var/log/apache2/*error.log', 'app_error'), ('/var/log/nginx/access.log', 'web_access'),
+                   ('/var/log/nginx/error.log', 'app_error'), ('/var/log/vsftpd.log', 'ftp_log'),
+                   ('/var/log/xferlog', 'ftp_log')],
+    'debian-splunk': list(DEBIAN_INPUTS),
+    'ubuntu-workstation': list(DEBIAN_INPUTS),
+    'kali': list(DEBIAN_INPUTS),
 }
+WINDOWS_CHANNELS = {
+    'operational': ['Microsoft-Windows-PowerShell/Operational',
+                    'Microsoft-Windows-Windows Defender/Operational',
+                    'Microsoft-Windows-TaskScheduler/Operational',
+                    'Microsoft-Windows-WMI-Activity/Operational'],
+    'sysmon': ['Microsoft-Windows-Sysmon/Operational'],
+    'dc': ['Directory Service', 'DNS Server', 'DFS Replication'],
+}
+
+
+def safe_value(value, kind='value'):
+    if not value or any(ord(c) < 32 or ord(c) == 127 or c in '[]' for c in value):
+        raise ValueError('unsafe %s' % kind)
+    return value
+
+
+def monitor_inputs(inputs, index, windows=False):
+    result, seen = '', {}
+    for item in inputs:
+        if isinstance(item, str):
+            path, sep, stype = item.rpartition(':')
+            if not sep or (windows and len(path) == 1):
+                path, stype = item, 'linux_syslog'
+        else:
+            path, stype = item
+        safe_value(path, 'path')
+        if not (path.startswith('/') or (windows and re.match(r'^[A-Za-z]:[\\/]', path))):
+            raise ValueError('monitor path must be absolute')
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]+', stype):
+            raise ValueError('unsafe sourcetype')
+        key = path.casefold() if windows else path
+        if key in seen:
+            if seen[key] != stype:
+                raise ValueError('conflicting sourcetypes for %s' % path)
+            continue
+        seen[key] = stype
+        result += '[monitor://%s]\ndisabled = 0\nindex = %s\nsourcetype = %s\n\n' % (path, index, stype)
+    return result
 
 
 def linux_forwarder(receiver, port, index, inputs):
@@ -58,20 +106,7 @@ def linux_forwarder(receiver, port, index, inputs):
         '[tcpout:team_indexer]\n'
         'server = %s:%s\n' % (receiver, port)
     )
-    inputs_conf = ''
-    for item in inputs:
-        if isinstance(item, str):
-            # Accept "path" or "path:sourcetype" from --input.
-            path, _, sourcetype = item.partition(':')
-            sourcetype = sourcetype or 'linux_syslog'
-        else:
-            path, sourcetype = item
-        inputs_conf += (
-            '[monitor://%s]\n' % path +
-            'disabled = 0\n'
-            'index = %s\n' % index +
-            'sourcetype = %s\n\n' % sourcetype
-        )
+    inputs_conf = monitor_inputs(inputs, index)
     return {'outputs.conf': outputs, 'inputs.conf': inputs_conf}
 
 
@@ -115,7 +150,7 @@ def linux_rsyslog_relay(index, host, port):
 
 # --- Windows -------------------------------------------------------------
 
-def windows_forwarder(receiver, port, index):
+def windows_forwarder(receiver, port, index, host_id=None, channels=None, inputs=None, optional_sources=None):
     # Local universal-forwarder collection (docs "Windows forwarder"). WEF is a
     # separate collector path and is not generated here; use this local UF path.
     outputs = (
@@ -125,16 +160,26 @@ def windows_forwarder(receiver, port, index):
         '[tcpout:team_indexer]\n'
         'server = %s:%s\n' % (receiver, port)
     )
+    extra_files = inputs or []
     # Core channels; add Directory Service (DC only), PowerShell/Operational and
     # Defender/Operational where the channel exists and is approved.
     inputs = ''
-    for chan in ('Security', 'System', 'Application'):
+    selected = ['Security', 'System', 'Application'] + list(channels or [])
+    for option in optional_sources or []:
+        if option == 'dc' and host_id != '2022-ad':
+            raise ValueError('dc sources require 2022-ad')
+        if option not in WINDOWS_CHANNELS:
+            raise ValueError('unsupported Windows optional source')
+        selected += WINDOWS_CHANNELS[option]
+    for chan in dict.fromkeys(selected):
+        safe_value(chan, 'channel')
         inputs += (
             '[WinEventLog://%s]\n' % chan +
             'disabled = 0\n'
             'index = %s\n' % index +
             'renderXml = true\n\n'
         )
+    inputs += monitor_inputs(extra_files, index, windows=True)
     return {'outputs.conf': outputs, 'inputs.conf': inputs}
 
 
@@ -144,6 +189,7 @@ def vyos_syslog(receiver, port):
     # VyOS 1.4 syslog (docs "VyOS 1.4"); retain existing destinations.
     return {'vyos-syslog.config': (
         "# VyOS 1.4: forward syslog to the approved relay over TCP (commit after review)\n"
+        "# Authentication and commit messages require verification on the installed build; firewall events require logging on selected existing rules (volume review).\n"
         "# Preserve existing destinations: show configuration commands | match syslog\n"
         "set system syslog host %s facility all level info\n"
         "set system syslog host %s port %s\n"
@@ -159,26 +205,53 @@ def paloalto_syslog(receiver, port):
         "set shared log-settings syslog TEAM-SYSLOG server splunk transport TCP\n"
         "set shared log-settings syslog TEAM-SYSLOG server splunk port %s\n"
         "set shared log-settings syslog TEAM-SYSLOG server splunk format BSD\n"
+        "# Threat logs require supported licensed security profiles attached to existing rules and log forwarding for generated Threat events.\n"
         "# Then attach TEAM-SYSLOG to the existing required security rules (Log at Session End)\n"
         "# and add System/Config forwarding in Device > Log Settings. Do not replace the rules.\n"
     ) % (receiver, port)}
 
 
-def plan(host, receiver, port, index, method, extra_inputs=None):
+def plan(host, receiver, port, index, method, extra_inputs=None, channels=None, optional_sources=None, os_source='files'):
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', index):
+        raise ValueError('unsafe index')
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', receiver) or not 1 <= port <= 65535:
+        raise ValueError('invalid receiver or port')
+    optional_sources = optional_sources or []
+    if method == 'syslog' and host['platform'] == 'linux' and host['id'] != 'debian-splunk':
+        raise ValueError('appliance relay is only supported on debian-splunk')
+    local_inputs = list(LINUX_INPUTS.get(host['id'], [])) + list(extra_inputs or [])
+    if os_source == 'journal' and host['platform'] == 'linux':
+        local_inputs = [item for item in local_inputs if not isinstance(item, tuple) or item[1] not in ('linux_auth', 'linux_syslog')]
+        local_inputs.append(('/var/log/team-journal.log', 'linux_journal'))
+    if host['id'] == 'debian-splunk' and any('/var/log/splunk' in str(item) for item in local_inputs):
+        raise ValueError('use built-in _internal/_audit instead of duplicate Splunk log monitors')
+    for option in optional_sources:
+        if host['platform'] == 'linux':
+            if option != 'auditd':
+                raise ValueError('Linux optional source must be auditd')
+            local_inputs.append(('/var/log/audit/audit.log', 'linux_audit'))
     if host['platform'] == 'linux':
         if method == 'syslog':
             files = linux_rsyslog_relay(index, host, port)
+            relay_paths = {entry[1]: entry[2] for entry in RELAY_SOURCES.values()}
+            filtered = []
+            for item in local_inputs:
+                path, stype = item if not isinstance(item, str) else (item.rsplit(':', 1) if ':' in item else (item, 'linux_syslog'))
+                if path in relay_paths:
+                    if stype != relay_paths[path]:
+                        raise ValueError('conflicting relay sourcetype')
+                    continue
+                filtered.append(item)
+            files['inputs.conf'] = monitor_inputs(filtered, index) + files['inputs.conf']
             note = ('Appliance syslog RELAY on the Splunk host. Enable with:\n'
                     '  sudo install -d -m 0750 /var/log/team-remote\n'
                     '  sudo cp rsyslog-team-relay.conf /etc/rsyslog.d/30-team-remote.conf\n'
                     '  sudo rsyslogd -N1 && sudo systemctl restart rsyslog\n'
                     'then deploy inputs.conf under the Splunk team_collection app and restart it.')
         else:
-            inputs = list(LINUX_INPUTS.get(host['id'], []))
-            if extra_inputs:
-                # --input overrides the per-host defaults when given.
-                inputs = list(extra_inputs)
-            files = linux_forwarder(receiver, port, index, inputs)
+            files = linux_forwarder(receiver, port, index, local_inputs)
+            if host['id'] == 'debian-splunk':
+                del files['outputs.conf']
             note = ('Deploy under the forwarder (use its discovered install path):\n'
                     '  sudo mkdir -p /opt/splunkforwarder/etc/apps/team_collection/local\n'
                     '  sudo cp outputs.conf inputs.conf /opt/splunkforwarder/etc/apps/team_collection/local/\n'
@@ -187,7 +260,7 @@ def plan(host, receiver, port, index, method, extra_inputs=None):
                     '  sudo systemctl restart "${UNIT:?Set UNIT using Step 1 discovery first}"\n'
                     'then verify per docs/splunk-data-sources.md "Linux forwarder" (btool, forward-server, splunkd.log).')
     elif host['platform'] == 'windows':
-        files = windows_forwarder(receiver, port, index)
+        files = windows_forwarder(receiver, port, index, host['id'], channels, extra_inputs, optional_sources)
         note = ('Local universal-forwarder collection (elevated PowerShell):\n'
                 '  $d = "C:\\Program Files\\SplunkUniversalForwarder\\etc\\apps\\team_collection\\local"\n'
                 '  New-Item -ItemType Directory -Force -Path $d | Out-Null\n'
@@ -202,6 +275,9 @@ def plan(host, receiver, port, index, method, extra_inputs=None):
         note = 'Apply the device syslog config through its normal candidate/commit workflow.'
     else:
         raise SystemExit('unsupported platform %r' % host['platform'])
+    if host['id'] == 'debian-splunk':
+        note = 'Deploy local inputs.conf in the existing Splunk instance; no outputs.conf, no self-forwarding. OS and relay stanzas coexist in this app. Built-in _internal/_audit inputs remain owned by Splunk. Do not monitor its log directory again.\n' + (note if method == 'syslog' else 'Restart the discovered existing Splunk unit after btool validation.')
+    note += '\nCandidates require live path/channel discovery and read permission. Optional auditd needs an active daemon/rules; Windows audit policy, PowerShell script logging, Sysmon installation and channel enablement require separate approval. No optional telemetry is enabled by this generator.'
     return files, note
 
 
@@ -289,7 +365,10 @@ def main():
     parser.add_argument('--method', choices=['forwarder', 'syslog'], default=None,
                         help='linux collection method: forwarder (per-host UF) or syslog (appliance relay on the Splunk host)')
     parser.add_argument('--input', action='append', default=[], metavar='PATH[:SOURCE_TYPE]',
-                        help='Linux monitor inputs (repeatable); when given, overrides the per-host defaults')
+                        help='Discovered absolute monitor PATH:SOURCETYPE (repeatable); appends to baseline')
+    parser.add_argument('--os-source', choices=['files', 'journal'], default='files', help='journal selects the approved text export instead of auth/system files')
+    parser.add_argument('--channel', action='append', default=[], help='append a confirmed Windows channel')
+    parser.add_argument('--optional-source', action='append', default=[], choices=['auditd', 'operational', 'sysmon', 'dc'])
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('plan', help='print the generated files and commands; write nothing')
     ap = sub.add_parser('apply', help='write files to --out (backs up anything it would overwrite)')
@@ -304,15 +383,7 @@ def main():
     method = a.method or ('syslog' if host['platform'] == 'network' else 'forwarder')
     port = a.port if a.port is not None else (1514 if method == 'syslog' else 9997)
 
-    extra_inputs = []
-    for spec in a.input:
-        if ':' not in spec:
-            extra_inputs.append(spec)  # path only; default sourcetype applied downstream
-            continue
-        path, stype = spec.split(':', 1)
-        extra_inputs.append((path, stype))
-
-    files, note = plan(host, a.receiver, port, a.index, method, extra_inputs)
+    files, note = plan(host, a.receiver, port, a.index, method, a.input, a.channel, a.optional_source, a.os_source)
 
     if a.action == 'plan':
         print('Host: %s (%s, %s)  receiver=%s:%s  index=%s  method=%s'

@@ -7,6 +7,7 @@ non-routable TEST-NET addresses. No live competition probes are performed.
 import copy
 import json
 import os
+from pathlib import Path
 import sys
 import tempfile
 import unittest
@@ -432,6 +433,110 @@ class ScopeRegressionTests(KaliWatchBase):
         cfg = self.load(self.raw)
         cfg['http_checks'] = [{'url': 'http://192.0.2.15/', 'expected_content': 'SECRET'}]
         self.assertNotIn('SECRET', json.dumps(kw.plan_document('monitor', cfg)))
+
+
+class ShippedExampleTests(KaliWatchBase):
+    """Exercise shipped inventory and activation fixtures without any network."""
+
+    root = Path(__file__).resolve().parents[1]
+
+    def example(self, scope):
+        raw = json.loads((self.root / 'config/kali-checks.example.json').read_text())
+        raw['target_scope'] = scope
+        return raw
+
+    def test_candidate_inventory_and_disabled_defaults_in_both_scopes(self):
+        candidates = {
+            'rocky-ecom': {21, 22, 80, 443},
+            'ubuntu-email': {21, 22, 25, 80, 110, 143, 443, 465, 587, 993, 995},
+            'debian-splunk': {22, 8000, 8089},
+            '2022-ad': {22, 53, 88, 135, 389, 445, 464, 636, 3268, 3269},
+            '2019-mssql': {22, 1433},
+        }
+        for scope, prefix in (('internal', '172.20.240.'), ('public', '172.25.37.')):
+            with self.subTest(scope=scope):
+                raw = self.example(scope)
+                cfg = self.load(raw)
+                self.assertEqual(cfg['team'], 17)
+                self.assertEqual({t['ip'] for t in cfg['targets']},
+                                 {prefix + suffix for suffix in ('10', '15', '20', '100', '120')})
+                self.assertEqual(len(cfg['targets']), 5)
+                self.assertEqual(cfg['http_checks'], [])
+                for target in cfg['targets']:
+                    self.assertFalse(target['service_checks_enabled'])
+                    self.assertEqual(set(target['ports']), candidates[target['id'].removesuffix('-public')])
+                    self.assertNotIn(1434, target['ports'])
+
+    def test_shipped_plans_and_disabled_execution(self):
+        for scope in ('internal', 'public'):
+            path = write_config(self.example(scope))
+            self.addCleanup(os.unlink, path)
+            for mode in ('map', 'exposure', 'monitor'):
+                with self.subTest(scope=scope, mode=mode), \
+                     mock.patch.object(kw.socket, 'create_connection') as conn, \
+                     mock.patch.object(kw.subprocess, 'run') as run, \
+                     mock.patch('sys.stdout', new=mock.Mock()):
+                    with self.assertRaises(SystemExit) as ctx:
+                        kw.main([mode, '--config', path])
+                    self.assertEqual(ctx.exception.code, 0)
+                    conn.assert_not_called()
+                    run.assert_not_called()
+            with mock.patch.object(kw, 'tcp_check') as tcp, \
+                 mock.patch.object(kw, 'http_check') as http, \
+                 mock.patch('sys.stdout', new=mock.Mock()):
+                with self.assertRaises(SystemExit) as ctx:
+                    kw.main(['monitor', '--config', path, '--execute'])
+                self.assertEqual(ctx.exception.code, 2)
+                tcp.assert_not_called()
+                http.assert_not_called()
+
+    def test_documented_activation_block_in_both_scopes(self):
+        import re
+        import subprocess
+        guide = (self.root / 'docs/kali-operations.md').read_text()
+        code = re.search(r"python3 - <<'PYCONFIG'\n(.*?)\nPYCONFIG", guide, re.S).group(1)
+        for scope in ('internal', 'public'):
+            with tempfile.TemporaryDirectory() as tmp:
+                cfgdir = Path(tmp) / 'config'
+                cfgdir.mkdir()
+                (cfgdir / 'kali-checks.example.json').write_text(json.dumps(self.example('internal')))
+                env = dict(os.environ, WATCH_SCOPE=scope, WATCH_PATH='/health',
+                           WATCH_CONTENT='Example healthy', WATCH_TLS_NAME='shop.example.test')
+                proc = subprocess.run([sys.executable, '-c', code], cwd=tmp, env=env,
+                                      capture_output=True, text=True, timeout=10)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                generated = json.loads((cfgdir / ('kali-checks-' + scope + '.json')).read_text())
+                cfg = self.load(generated)
+                fixture = json.loads((self.root / ('tests/fixtures/kali-http-' + scope + '.json')).read_text())
+                self.assertEqual(cfg, self.load(fixture))
+
+    def test_activated_http_https_fixtures(self):
+        for scope in ('internal', 'public'):
+            raw = json.loads((self.root / ('tests/fixtures/kali-http-' + scope + '.json')).read_text())
+            cfg = self.load(raw)
+            self.assertEqual(len(cfg['http_checks']), 2)
+            with mock.patch.object(kw, 'tcp_check', return_value=('up', 1, None)) as tcp, \
+                 mock.patch.object(kw, '_open', side_effect=lambda req, *args:
+                     mock_response(200, req.full_url, b'Example healthy')) as op, \
+                 mock.patch.object(kw.time, 'sleep'), \
+                 mock.patch('sys.stdout', new=mock.Mock()):
+                with self.assertRaises(SystemExit) as ctx:
+                    kw.run_monitor(cfg)
+                self.assertEqual(ctx.exception.code, 0)
+                self.assertEqual(tcp.call_count, 2)
+                self.assertEqual(op.call_count, 2)
+                https_args = op.call_args_list[1].args
+                self.assertTrue(https_args[2].check_hostname)
+                self.assertEqual(https_args[3], 'shop.example.test')
+            # Switching scope alone, disabling the target, or removing its port
+            # must reject the HTTP endpoint before execution.
+            switched = copy.deepcopy(raw)
+            switched['target_scope'] = 'public' if scope == 'internal' else 'internal'
+            self.assert_rejected(switched)
+            for enabled, ports in ((False, [80, 443]), (True, [80])):
+                broken = copy.deepcopy(raw)
+                broken[scope + '_targets'][0].update(service_checks_enabled=enabled, ports=ports)
+                self.assert_rejected(broken)
 
 
 if __name__ == '__main__':

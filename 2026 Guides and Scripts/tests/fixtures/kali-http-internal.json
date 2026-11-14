@@ -1,0 +1,164 @@
+{
+  "team": 17,
+  "target_scope": "internal",
+  "_comment_team": "Set to your assigned team number (1-20) to enable public target validation. Leave null for internal-only use. Team 17: N = 20 + 17 = 37.",
+  "_comment_internal_targets": "Five fixed server addresses from the packet inventory. Service checks are disabled by default until discovery confirms port assignments. Dynamic ports require discovery.",
+  "_comment_public_targets": "Team 17 public targets (N=37): 172.25.37.10, .15, .20, .100, .120. Exclude core infrastructure (172.31.37.1), shared egress (172.31.37.2), and all other teams' addresses. Do not scan DHCP workstations.",
+  "_comment_tcp_ports": "Disabled TCP candidates only: FTP 21; SSH 22; mail 25/465/587/110/143/993/995; AD DNS TCP 53, Kerberos 88/464, RPC 135, LDAP 389/636/3268/3269, SMB 445; SQL 1433; Splunk 8000/8089. Discover dynamic RPC and named SQL instance ports separately. UDP DNS, Kerberos and SQL Browser UDP 1434 require separate tools; never infer their health from TCP.",
+  "_comment_infrastructure_exclusions": "Core infrastructure (172.31.37.1), shared egress (172.31.37.2), and unknown DHCP workstations are excluded from scan targets per environment.md constraints.",
+  "internal_targets": [
+    {
+      "id": "rocky-ecom",
+      "ip": "172.20.240.10",
+      "ports": [
+        80,
+        443
+      ],
+      "service_checks_enabled": true
+    },
+    {
+      "id": "ubuntu-email",
+      "ip": "172.20.240.15",
+      "ports": [
+        21,
+        22,
+        25,
+        80,
+        110,
+        143,
+        443,
+        465,
+        587,
+        993,
+        995
+      ],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "debian-splunk",
+      "ip": "172.20.240.20",
+      "ports": [
+        22,
+        8000,
+        8089
+      ],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "2022-ad",
+      "ip": "172.20.240.100",
+      "ports": [
+        22,
+        53,
+        88,
+        135,
+        389,
+        445,
+        464,
+        636,
+        3268,
+        3269
+      ],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "2019-mssql",
+      "ip": "172.20.240.120",
+      "ports": [
+        22,
+        1433
+      ],
+      "service_checks_enabled": false
+    }
+  ],
+  "public_targets": [
+    {
+      "id": "rocky-ecom-public",
+      "ip": "172.25.37.10",
+      "ports": [
+        21,
+        22,
+        80,
+        443
+      ],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "ubuntu-email-public",
+      "ip": "172.25.37.15",
+      "ports": [
+        21,
+        22,
+        25,
+        80,
+        110,
+        143,
+        443,
+        465,
+        587,
+        993,
+        995
+      ],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "debian-splunk-public",
+      "ip": "172.25.37.20",
+      "ports": [
+        22,
+        8000,
+        8089
+      ],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "2022-ad-public",
+      "ip": "172.25.37.100",
+      "ports": [
+        22,
+        53,
+        88,
+        135,
+        389,
+        445,
+        464,
+        636,
+        3268,
+        3269
+      ],
+      "service_checks_enabled": false
+    },
+    {
+      "id": "2019-mssql-public",
+      "ip": "172.25.37.120",
+      "ports": [
+        22,
+        1433
+      ],
+      "service_checks_enabled": false
+    }
+  ],
+  "http_checks": [
+    {
+      "url": "http://172.20.240.10/health",
+      "expected_status": 200,
+      "expected_content": "Example healthy"
+    },
+    {
+      "url": "https://172.20.240.10/health",
+      "sni_hostname": "shop.example.test",
+      "expected_status": 200,
+      "expected_content": "Example healthy"
+    }
+  ],
+  "_comment_http_checks": "Add after confirming endpoints and TLS trust prerequisites. Example HTTP: {\"url\": \"http://172.20.240.10/\", \"expected_status\": 200, \"expected_content\": \"Welcome\"}. Example HTTPS/SNI (certificate issued to virtual-host name): {\"url\": \"https://172.20.240.10/\", \"sni_hostname\": \"gateway.netlab.local\", \"expected_status\": 200, \"expected_content\": \"Welcome\"}. No credentials in URLs. Redirects are never followed; response bodies are not stored. Certificate validation is enabled by default.",
+  "timeouts": {
+    "connect_seconds": 3,
+    "read_seconds": 5
+  },
+  "probe_limits": {
+    "max_parallel": 1,
+    "delay_ms": 200
+  },
+  "_comment_fixture": "Offline test fixture only. Endpoints, content and certificate name are illustrative, not discovered assignments. Do not execute unchanged."
+}

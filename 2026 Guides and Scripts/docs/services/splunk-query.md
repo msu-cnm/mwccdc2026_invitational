@@ -9,25 +9,21 @@ Candidate service (packet role: "Splunk authenticated query; exact endpoint, ind
 Confirm Splunk is installed, running, and discover the actual endpoints:
 
 ```bash
-systemctl status <discovered-unit>
-ss -lnt '( sport = :8000 or sport = :8089 or sport = :9997 or sport = :8088 )'
+systemctl status splunk
+ss -lnt | grep -E ':8000$|:8089$|:9997$|:8088$'
 # Web console port (default 8000, may differ)
 grep -r 'http_port\|mgmt_port\|server.port' /opt/splunk/etc/system/ 2>/dev/null
 # Check for configured inputs (forwarder/syslog)
-/opt/splunk/bin/splunk btool inputs list --debug
+/opt/splunk/bin/splunk list inputs 2>/dev/null | head -40
 # Check indexes
-/opt/splunk/bin/splunk list indexes
+/opt/splunk/bin/splunk list indexes 2>/dev/null
 ```
 
 From a client (Kali or another host):
 
 ```bash
-curl --cacert /path/to/lab-ca.pem --connect-timeout 5 --max-time 15 \
-  'https://<splunk-fqdn>:8089/services/server/info' -o /dev/null -w '%{http_code}\n'
-# Splunk Web defaults to HTTP unless enableSplunkWebSSL is enabled in web.conf
-curl --connect-timeout 5 --max-time 15 'http://<splunk-fqdn>:8000/en-US/account/login' \
-  -o /dev/null -w '%{http_code}\n'
-# Use HTTPS with the trusted CA when the discovered Web listener has TLS enabled.
+curl --cacert /path/to/lab-ca.pem https://<host>:8089/services/server/info -o /dev/null -w '%{http_code}'
+curl --cacert /path/to/lab-ca.pem https://<host>:8000/login -o /dev/null -w '%{http_code}'
 ```
 
 ## Setup
@@ -49,7 +45,7 @@ For concrete receiver, Linux/Windows forwarder and appliance onboarding, follow 
 
 ### Authentication
 
-- **Web console** (default port 8000, HTTP unless Web TLS is enabled): `http://<host>:8000` or the discovered HTTPS URL — requires username/password.
+- **Web console** (default port 8000): `https://<host>:8000` — requires username/password.
 - **Management API** (default port 8089): `https://<host>:8089/services/...` — REST API with the same or a separate admin account.
 - Discover the actual admin user: use Settings > Access controls > Users with an authorized administrator, or ask the portal.
 
@@ -65,8 +61,8 @@ Splunk can receive data via:
 # Check if HEC is enabled
 /opt/splunk/bin/splunk list http-event-collector 2>/dev/null
 # Check TCP/UDP inputs
-/opt/splunk/bin/splunk btool inputs list --debug
-# Inspect tcp://, udp:// and splunktcp:// stanzas separately in that output
+/opt/splunk/bin/splunk list inputs -type TCP 2>/dev/null
+/opt/splunk/bin/splunk list inputs -type UDP 2>/dev/null
 ```
 
 ### Indexes and search
@@ -92,7 +88,7 @@ GUI equivalent: Policies > NAT, Policies > Security, Monitor > Traffic.
 ## Monitoring
 
 ```bash
-systemctl status <discovered-unit>
+systemctl status splunk
 # Authenticated management health; curl prompts for the password
 curl --cacert /path/to/lab-ca.pem --user '<user>' \
   'https://<splunk-fqdn>:8089/services/server/info?output_mode=json'
@@ -113,14 +109,13 @@ Back up Splunk configuration and index data before any change:
 
 ```bash
 BACKUP_DIR="/root/backup-splunk-$(date -u +%Y%m%d%H%M%S)"
-umask 077
-mkdir -m 700 "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
 # Configuration (all conf files)
 cp -rp /opt/splunk/etc "$BACKUP_DIR/"
 # Stop the discovered Splunk unit in a coordinated maintenance window first.
 # This is an offline single-instance backup, not a live bucket backup.
 # Index data (full index backup can be large)
-tar czf "$BACKUP_DIR/indexes.tar.gz" -C /opt/splunk/var/lib/splunk .
+tar czf "$BACKUP_DIR/indexes.tar.gz" -C /opt/splunk/var/lib/splunk . 2>/dev/null
 # Or selective:
 # tar czf "$BACKUP_DIR/index-<name>.tar.gz" -C /opt/splunk/var/lib/splunk <index_name>
 ```
@@ -136,21 +131,25 @@ Verify the scored query returns expected information:
 # Use a discovered query/index and a CA that validates the server hostname.
 curl --cacert /path/to/lab-ca.pem --user '<user>' \
   'https://<splunk-fqdn>:8089/services/search/jobs/export' \
-  --data-urlencode 'search=search index=team_security earliest=-15m | stats count by host' \
+  --data-urlencode 'search=search index=team_security earliest=-17m latest=-2m | stats count by host source sourcetype' \
   -d output_mode=json
 ```
 
 HEC defaults to HTTPS 8088, with payload `{"event":"collection-test","host":"verified-host"}` at `/services/collector/event`; it requires an enabled token assigned to an existing permitted index. Use the receiver/forwarder recipe instead unless HEC is specifically needed. Never send a HEC token to the management API or a forwarder receiver (9997).
 
+The export is a bounded read-only example using the generator's `team_security` index; confirm the scored query separately. Use the observed host mappings and expected-source lookup from the [hunting guide](../splunk-threat-hunting.md#expected-source-health-and-kali-pass-expansion) to detect missing sources when zero events exist. Ordinary event stats cannot show an absent source. Built-in Splunk health uses `_internal` and `_audit`, with separately granted access. A two-minute delay allowance is an example to tune against measured `_indextime - _time`; scheduled searches need sufficient search/index permissions, lookup access, and scheduler capacity.
+
+Curl `--user '<user>'` prompts for the password: do not put passwords or tokens in command arguments, shell history, source files, or exported logs. For automation use the approved secret store and a narrowly scoped identity, with protected credential files only where supported. Validate certificates with the trusted CA and matching server hostname; do not use `-k` for authenticated checks. API permission errors and search/job errors are failures even if HTTP transport succeeds; inspect response content as well as status.
+
 Test from both internal and public paths. Confirm Quotient shows the query returning expected data.
 
 ## Recovery
 
-1. Stop Splunk: `sudo systemctl stop <discovered-unit>`
+1. Stop Splunk: `sudo systemctl stop splunk`
 2. Restore config: `cp -rp "$BACKUP_DIR"/etc /opt/splunk/`
 3. Restore index data if needed: `tar xzf "$BACKUP_DIR/indexes.tar.gz" -C /opt/splunk/var/lib/splunk/`
-4. Start Splunk: `sudo systemctl start <discovered-unit>`
-5. Wait for full startup (~30s): `systemctl status <discovered-unit>`
+4. Start Splunk: `sudo systemctl start splunk`
+5. Wait for full startup (~30s): `systemctl status splunk`
 6. Verify with a test query via API
 7. Record UTC time and residual exposure
 

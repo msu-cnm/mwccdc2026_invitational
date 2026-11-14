@@ -1,4 +1,4 @@
- # Splunk threat hunting and monitoring
+# Splunk threat hunting and monitoring
 
 Start collection with the [per-host Splunk data-source setup](splunk-data-sources.md), including receiver configuration, forwarder inputs, appliance syslog, test events and alerts.
 
@@ -11,7 +11,7 @@ Use the [environment](environment.md), [event worksheet](event-checklist.md) and
 3. Existing readable local logs are available only after confirming their existence and permissions. Central ingestion is unconfirmed for every machine. A forwarder can read permitted files/Windows channels if already approved; Windows Event Forwarding to an existing collector is another option. A syslog relay can persist appliance logs to protected files for existing collection. Prefer reliable authenticated/encrypted transport where supported; UDP may lose events. Do not assume TLS, receivers or certificates exist. Avoid duplicate collection, credential-bearing command lines and unrestricted log permissions.
 4. Validate timestamp parsing, multiline framing, Windows XML extraction and source host attribution on one harmless event. Restrict collection privileges to needed channels/files. Root/administrator may be needed locally; Splunk search permissions may omit `_audit`, `_internal` or security indexes. Empty results can mean denied access, missing ingestion, wrong time/host/fields, disabled audit, filtering, dropped events or actual silence.
 
-All examples use **SPL**, not SPL2. Replace `index=REPLACE_SECURITY`, `index=REPLACE_NETWORK`, `index=REPLACE_WEB`, `index=REPLACE_MAIL`, sourcetypes and host placeholders with discovered values before use. `_audit` and `_internal` are built-in names, but access and local indexing still need verification. Proposed sourcetypes are labels to map to your actual parser; no Common Information Model or add-on is required or presumed. The raw alternatives below are a fallback for discovery, not equivalent detections.
+All examples use **SPL**, not SPL2. The generator uses `index=team_security` for external sources; replace that index only if deliberately configured differently. Verify sourcetypes and host placeholders with discovered values before use. `_audit` and `_internal` are built-in names, but access and local indexing still need verification. Proposed sourcetypes are labels to map to your actual parser; no Common Information Model or add-on is required or presumed. The raw alternatives below are a fallback for discovery, not equivalent detections.
 
 ## Ten-machine telemetry matrix
 
@@ -35,18 +35,18 @@ Every source in this table is a collection candidate, not a statement that it is
 Start with a small permitted index and bounded window, then discover source values and fields:
 
 ```spl
-index=REPLACE_SECURITY earliest=-15m latest=now
+index=team_security earliest=-15m latest=now
 | stats count by host source sourcetype
 ```
 
 ```spl
-index=REPLACE_SECURITY host="REPLACE_HOST" earliest=-15m latest=now
+index=team_security host="REPLACE_HOST" earliest=-15m latest=now
 | head 100
 | fieldsummary
 ```
 
 ```spl
-index=REPLACE_SECURITY host="REPLACE_HOST" earliest=-15m latest=now
+index=team_security host="REPLACE_HOST" earliest=-15m latest=now
 | head 50
 | table _time _indextime host source sourcetype _raw
 ```
@@ -58,7 +58,7 @@ Run the same discovery with the corresponding network/web/mail index for those s
 Prerequisite: actual Linux authentication or Windows Security 4624/4625 collection. Normalize `user`, `src_ip`, and `action` (`failure`/`success`) from the actual event format first; Windows SubjectUserName is often the actor/system rather than the target. Map target account and source address, exclude missing/placeholder values and classify logon type. This example requires those normalized fields:
 
 ```spl
-index=REPLACE_SECURITY earliest=-30m latest=now action IN ("failure","success")
+index=team_security earliest=-30m latest=now action IN ("failure","success")
 | where isnotnull(user) AND isnotnull(src_ip)
 | sort 0 _time
 | streamstats time_window=10m count(eval(action="failure")) AS preceding_failures BY host user src_ip
@@ -73,7 +73,7 @@ Expected: successful logins preceded by at least five failures for that account/
 Prerequisite: Windows User Account/ Security Group Management auditing, Security ingestion, mapped EventCode and target/subject fields. 4719 is associated with Audit Policy Change but is logged regardless of that subcategory setting; 4739 requires Authentication Policy Change auditing. Security 1102 reports audit-log clearing independently of those account-management subcategories. Domain groups appear on DCs; local groups on member hosts. Linux changes require auditd rules for account files/executables or independent reviewed snapshots; ordinary auth logs do not record every account edit.
 
 ```spl
-index=REPLACE_SECURITY earliest=-30m latest=now
+index=team_security earliest=-30m latest=now
 | eval event_id=coalesce(EventCode,EventID)
 | where event_id IN ("4720","4722","4724","4728","4732","4756","4738","4739","4719","1102")
 | table _time host event_id SubjectUserName TargetUserName MemberName GroupName _raw
@@ -86,7 +86,7 @@ Expected: new/enabled/changed users, password resets, group additions, domain/au
 Prerequisite: System 7045 collection; Security 4697 requires Security System Extension auditing, 4698/4702 require Other Object Access Events auditing. PowerShell 4104 requires Script Block Logging in Microsoft-Windows-PowerShell/Operational; 4688 needs Process Creation auditing, with command lines separately enabled. TaskScheduler Operational must be enabled/collected for its history. These are optional beyond Logon auditing.
 
 ```spl
-index=REPLACE_SECURITY earliest=-30m latest=now
+index=team_security earliest=-30m latest=now
 | eval event_id=coalesce(EventCode,EventID)
 | where event_id IN ("7045","4697","4698","4702","4104")
 | table _time host source event_id SubjectUserName ServiceName ImagePath TaskName _raw
@@ -99,7 +99,7 @@ Expected: new services/tasks, task modifications and script blocks, not automati
 Prerequisite: web access extraction (`status`, `src_ip`, `uri_path`, `method`) with trusted proxy handling. `src_ip` must not blindly trust client-supplied forwarded headers. Replace host with actual Rocky host mapping:
 
 ```spl
-index=REPLACE_WEB host="REPLACE_ROCKY_HOST" earliest=-30m latest=now
+index=team_security host="REPLACE_ROCKY_HOST" earliest=-30m latest=now
 | eval status=tonumber(status)
 | bin _time span=5m
 | stats count AS requests count(eval(status>=500)) AS server_errors values(uri_path) AS paths BY _time src_ip
@@ -111,7 +111,7 @@ Expected: bursts and error clusters. Promotions, crawlers, score checks and brok
 Prerequisite: actual mail daemon authentication/queue logs, mapped `action` (`auth_failure`, `accepted`, `deferred`, `rejected`), `src_ip`, `user`, `queue_id`; these labels require explicit normalization, not guessed strings:
 
 ```spl
-index=REPLACE_MAIL host="REPLACE_MAIL_HOST" earliest=-30m latest=now
+index=team_security host="REPLACE_MAIL_HOST" earliest=-30m latest=now
 | eval src_ip=coalesce(src_ip,"unknown"), user=coalesce(user,"unknown")
 | bin _time span=5m
 | stats count AS events dc(queue_id) AS messages count(eval(action="auth_failure")) AS auth_failures count(eval(action="deferred")) AS deferred BY _time src_ip user
@@ -125,7 +125,7 @@ Expected: authentication bursts, submission volume or deferrals. Queue-only even
 Prerequisite: verified appliance syslog schema with original-device `host`; Config logs for PAN-OS and commit/configuration messages for VyOS. Normalize `event_category="configuration"` and `user`, `action`, `object` from actual messages; no parser is assumed:
 
 ```spl
-index=REPLACE_NETWORK earliest=-30m latest=now event_category="configuration"
+index=team_security earliest=-30m latest=now event_category="configuration"
 | table _time host user action object source _raw
 ```
 
@@ -147,7 +147,7 @@ Expected: actor/action summaries; pivot into individual audit events for changed
 Prerequisite: timestamp parsing and access to expected indexes. `_indextime-_time` mixes forwarding delay and source clock error; investigate both. Event-time bounds can miss severely delayed events:
 
 ```spl
-index=REPLACE_SECURITY earliest=-24h latest=now _index_earliest=-30m _index_latest=now
+index=team_security earliest=-24h latest=now _index_earliest=-30m _index_latest=now
 | eval lag_seconds=_indextime-_time
 | stats count perc95(lag_seconds) AS p95_lag max(lag_seconds) AS worst_lag min(lag_seconds) AS min_lag BY host source
 | where p95_lag>120 OR min_lag < -60
@@ -160,7 +160,7 @@ Prepare a reviewed **expected-host inventory**, not one derived from events. Thr
 ```spl
 | inputlookup expected_hosts.csv
 | eval expected=1
-| append [ search index=REPLACE_SECURITY earliest=-24h latest=now
+| append [ search index=team_security earliest=-24h latest=now
     | stats latest(_time) AS last_seen BY host ]
 | stats max(expected) AS expected values(topology_id) AS topology_id max(max_silence_seconds) AS max_silence_seconds max(last_seen) AS last_seen BY host
 | where expected=1
@@ -170,7 +170,7 @@ Prepare a reviewed **expected-host inventory**, not one derived from events. Thr
 | table topology_id host state last_seen age_seconds max_silence_seconds
 ```
 
-Replace the subsearch base with **all explicit discovered collection indexes**, e.g. `(index=team_security OR index=team_network OR index=team_web OR index=team_mail OR index=_internal)`; using security alone is wrong for network-only machines. Keep the 24h window and reasonable host count; append/subsearch limits can truncate observations, so inspect search warnings. Prefer one inventory row per expected host/source pair when distinguishing missing channels on an otherwise active host, and group both inventory and observed data by host/source. A quiet host needs an existing approved periodic signal or a generous documented threshold; no events alone do not imply compromise. Raw fallback: inspect local source records and receiver files independently; a search over events alone cannot reveal hosts that never sent any. Missing lookup access is an error to resolve, never a healthy result.
+Replace the subsearch base with **all explicit discovered collection indexes**, e.g. `(index=team_security OR index=team_network OR index=team_web OR index=team_mail OR index=_internal)`; the generated relay also uses team_security; include other indexes only if actually configured. Keep the 24h window and reasonable host count; append/subsearch limits can truncate observations, so inspect search warnings. Prefer one inventory row per expected host/source pair when distinguishing missing channels on an otherwise active host, and group both inventory and observed data by host/source. A quiet host needs an existing approved periodic signal or a generous documented threshold; no events alone do not imply compromise. Raw fallback: inspect local source records and receiver files independently; a search over events alone cannot reveal hosts that never sent any. Missing lookup access is an error to resolve, never a healthy result.
 
 ## Operating and rehearsing safely
 
@@ -211,3 +211,41 @@ Official source review date: 2026-11-13. The linked official references were ret
 - [Microsoft Windows Event Forwarding](https://learn.microsoft.com/en-us/windows/security/operating-system-security/device-management/use-windows-event-forwarding-to-assist-in-intrusion-detection): collection architecture and prerequisites.
 
 - [Microsoft 4719 audit-policy change semantics](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4719) and [4739 domain-policy auditing](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4739): reviewed 2026-11-13.
+
+
+## Expected source health and Kali pass expansion
+
+Use `team_security` for generated Linux, Windows and appliance inputs; built-in Splunk logs remain in `_internal`/`_audit`. File sourcetypes include `linux_auth`, `linux_syslog`, `linux_journal`, `linux_audit`, `package_history`, `web_access`, `app_error`, `mail_log`, `ftp_log`, `sql_error`, `sql_agent`, `pan_raw`, `vyos_syslog`, and explicitly added `kali_watch`. Windows XML sourcetypes vary by installed input/add-on: discover them rather than forcing a label. Fields in detections require verified extractions; `pan_raw` does not itself supply `event_category`.
+
+For a scheduled missing-source search, create `expected_sources.csv` with columns `topology_id,host,source,max_silence_seconds`. Include one row per **confirmed** source using observed host and source values, including full Windows source names. Do not inventory unavailable optional sources. Grant the scheduled-search owner lookup read and index search permissions. This starts from inventory and returns missing rows even if the entire event search returns zero events:
+
+```spl
+| inputlookup expected_sources.csv
+| eval expected=1
+| append [ search index=team_security earliest=-24h latest=-2m
+    | stats latest(_time) AS last_seen by host source ]
+| stats max(expected) AS expected max(last_seen) AS last_seen values(topology_id) AS topology_id max(max_silence_seconds) AS max_silence_seconds by host source
+| where expected=1
+| eval age_seconds=now()-last_seen
+| where isnull(last_seen) OR age_seconds>tonumber(max_silence_seconds)
+| eval state=if(isnull(last_seen),"absent in bounded window","late")
+| table topology_id host source state last_seen age_seconds
+```
+
+Schedule every five minutes only after validating expected cadence. The 24-hour lookback bounds workload and caps detectable last-seen history; thresholds must fit that window and allow the two-minute ingestion delay. Overlap needs alert suppression keyed by host/source. Check subsearch limits, skipped jobs, lookup errors and role visibility; permission failures must never be treated as healthy. Quiet package logs need generous thresholds or exclusion from periodic health alerts. Test an inventory fixture with zero ingested events.
+
+Kali results contain nested `passes` and `checks`. Preserve each pass timestamp before expanding checks; the root result timestamp is completion time, not every probe's time:
+
+```spl
+index=team_security sourcetype=kali_watch earliest=-17m latest=-2m host="REPLACE_KALI_HOST"
+| spath path=passes{} output=pass
+| mvexpand pass
+| spath input=pass path=time_utc output=pass_time_utc
+| spath input=pass path=checks{} output=check
+| mvexpand check
+| spath input=check
+| eval pass_epoch=strptime(pass_time_utc,"%Y-%m-%dT%H:%M:%SZ")
+| table pass_time_utc pass_epoch host check
+```
+
+Inspect the expanded `check` JSON and map its actual fields before alerting; retain `pass_time_utc` in exports and deduplicate repeated result-file ingestion. See the [collection recipe](splunk-data-sources.md#kali-nested-json-result-ingestion) for multiline event boundaries without changing the output schema.

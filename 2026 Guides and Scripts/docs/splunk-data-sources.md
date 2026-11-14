@@ -4,17 +4,21 @@ These are operator procedures for the existing Debian 12 / Splunk 10.0.2 environ
 
 ## Splunk Universal Forward downloads
 
+[](https://github.com/msu-cnm/mwccdc2026_invitational/blob/main/2026%20Guides%20and%20Scripts/docs/splunk-data-sources.md#splunk-universal-forward-downloads)
+
 Windows
-```bash
+
+```shell
 wget -O splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi"
 ```
+
 Linux
-```bash
+
+```shell
 wget -O splunkforwarder-10.6.1.1-b2ae2962645c.x86_64.rpm "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c.x86_64.rpm"
 wget -O splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb"
 wget -O splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz"
 ```
-
 ## How this guide works
 
 Every host is configured in the same three-step loop:
@@ -48,7 +52,7 @@ python3 scripts/splunk_setup.py rocky-ecom --receiver 172.20.240.20 rollback --o
 python3 scripts/splunk_setup.py debian-splunk --receiver 172.20.240.20 --method syslog plan
 ```
 
-Rollback restores generated files only; deployed copies, service restarts and appliance commits require the recovery steps below. The relay examples use TCP 1514 (the default `--port` for the syslog method); configure both appliances and the approved firewall path for that same port. For Debian Splunk's own logs, deploy only local `inputs.conf` into the existing Splunk instance; do not deploy the generated forwarding output back to itself or install a second forwarder. Default Linux paths require existing readable log files; use the journal recipe below if they are absent. Add discovered service logs with `--input PATH:SOURCE_TYPE`; this replaces the default input list, so include auth/system paths too.
+Rollback restores generated files only; deployed copies, service restarts and appliance commits require the recovery steps below. The relay examples use TCP 1514 (the default `--port` for the syslog method); configure both appliances and the approved firewall path for that same port. For Debian Splunk's own logs, deploy only local `inputs.conf` into the existing Splunk instance; no forwarding output is generated for Debian. Do not install a second forwarder. Default Linux paths require existing readable log files; use the journal recipe below if they are absent. Add discovered service logs with `--input PATH:SOURCE_TYPE`; this appends to the baseline input list.
 
 
 ## Values to record first
@@ -149,7 +153,7 @@ python3 scripts/splunk_setup.py rocky-ecom --receiver <splunk-ip> apply \
   --out ./generated-rocky --backup ./rocky-before.json
 ```
 
-   (Use the host's own id: `ubuntu-email`, `ubuntu-workstation`, `kali`. Add `--input PATH:SOURCE_TYPE` for extra service logs — this replaces the default list, so include auth/system paths too.) Note: the generated `inputs.conf` uses the OS's default log paths (`/var/log/auth.log` + `/var/log/syslog` on Ubuntu/Kali, `/var/log/secure` + `/var/log/messages` on Rocky) — verify each file exists on the host before deploying.
+   (Use the host's own id: `ubuntu-email`, `ubuntu-workstation`, `kali`. Add `--input PATH:SOURCE_TYPE` for extra service logs — this appends to the baseline list.) Note: the generated `inputs.conf` uses the OS's default log paths (`/var/log/auth.log` + `/var/log/syslog` on Ubuntu/Kali, `/var/log/secure` + `/var/log/messages` on Rocky) — verify each file exists on the host before deploying.
 
 2. Review `./generated-rocky/outputs.conf` and `inputs.conf`, then copy them to the host through an approved path and deploy:
 
@@ -259,14 +263,26 @@ msiexec.exe /i C:\Install\<package>.msi
 
 ### Step 2 — Generate and deploy inputs.conf
 
-1. On your workstation, generate the file:
+1. Generate the files. The Windows hosts have no Python installed, so use the PowerShell equivalent on the host itself (Windows PowerShell 5.1+, no dependencies):
+
+```powershell
+# In PowerShell on the target host — preview first (writes nothing):
+.\splunk_setup_windows.ps1 -Receiver <splunk-ip>
+
+# Then generate into a staging directory:
+.\splunk_setup_windows.ps1 -Receiver <splunk-ip> -OutDir .\generated-2022ad
+```
+
+   Add extra channels where they exist, e.g. on the DC: `-Channel 'Directory Service'`. Confirm each with `Get-WinEvent -ListLog '<channel>'` before deploying.
+
+   Alternatively, generate on your Linux workstation with Python and copy the two files over — same content either way:
 
 ```bash
 python3 scripts/splunk_setup.py 2022-ad --receiver <splunk-ip> apply \
   --out ./generated-2022ad --backup ./2022ad-before.json
 ```
 
-   (Use the host's own id: `2019-mssql`, `windows11-workstation`. The script already includes only channels that exist on each host, but confirm with `Get-WinEvent -ListLog '<channel>'` before deploying.)
+   (Use the host's own id: `2019-mssql`, `windows11-workstation`.)
 
 2. Copy the generated files to the host through an approved path and deploy them:
 
@@ -344,7 +360,7 @@ Get-Content 'C:\Program Files\SplunkUniversalForwarder\var\log\splunk\splunkd.lo
 
 4. Run the end-to-end test in [Verify collection](#verify-collection-and-turn-it-into-monitoring). If your test event appears in Splunk Search, this host is done.
 
-For MSSQL additionally add a file monitor for the actual ERRORLOG discovered in SQL Server Configuration Manager > service startup parameter `-e`. Give the forwarder read access to that directory; use `index = team_security`, `sourcetype = sql_error`. SQL statement auditing requires a separate SQL Audit/Extended Events configuration; ERRORLOG alone cannot supply it.
+For MSSQL additionally add a file monitor for the actual ERRORLOG discovered in SQL Server Configuration Manager > service startup parameter `-e`. Give the forwarder read access to that directory; use `index = team_security`, `sourcetype = sql_error`. SQL statement auditing requires a separate SQL Audit/Extended Events configuration; ERRORLOG alone cannot supply it. Never monitor binary `.sqlaudit` or `.xel` files as text: use an approved supported reader/export to a specific sanitized text file if those sources are needed.
 
 ## Appliance relay on Debian Splunk
 
@@ -472,9 +488,9 @@ Inspect first, preserve existing destinations, then:
 ```text
 show configuration commands | match syslog
 configure
-set system syslog remote 172.20.240.20 facility all level info
-set system syslog remote 172.20.240.20 port 1514
-set system syslog remote 172.20.240.20 protocol tcp
+set system syslog host 172.20.240.20 facility all level info
+set system syslog host 172.20.240.20 port 1514
+set system syslog host 172.20.240.20 protocol tcp
 compare
 commit-confirm 5
 ```
@@ -544,3 +560,70 @@ If no event arrives, inspect in order: source event/channel, file permissions, f
 To reverse this change, restore only the backed-up `team_collection` app files (remove that app if newly created), restart the affected collector in a coordinated window, and remove only new syslog destinations/profile attachments and receiver rules. Use VyOS confirmed commits and PAN-OS candidate validation. Keep existing inputs, scored indexes and stored evidence. Do not delete indexed data as rollback. Recheck scored functional services and record residual collection gaps.
 
 References: [Splunk forwarder installation](https://help.splunk.com/en/splunk-enterprise/forward-and-process-data/universal-forwarder-manual), [Splunk inputs.conf](https://docs.splunk.com/Documentation/Splunk/latest/Admin/Inputsconf), [VyOS syslog](https://docs.vyos.io/en/1.4/configuration/system/syslog.html). Use installed-version help for platform differences. These links are references, not a claim of live validation.
+
+## Host profiles and explicit optional sources
+
+Every row is a candidate pending live assignment, file/channel existence and collector read access. All generated external inputs use `index=team_security`; labels do not install field extractions. Defaults are conventional current files, not recursive directory monitors or guesses about application installations. Absent files do not prove collection works. Rotated/compressed history is not selected by these patterns.
+
+| Topology ID | Baseline candidates | Confirmed additions / prerequisites |
+|---|---|---|
+| `rocky-ecom` | secure/messages, dnf.log/dnf.rpm.log, httpd `*access_log`/`*error_log`, nginx access/error, vsftpd.log/xferlog | Discover application logs and custom virtual-host paths; append `--input /actual/app.log:app_error`; auditd optional |
+| `ubuntu-email` | auth.log/syslog, apt/history.log/dpkg.log, mail.log/dovecot.log, apache2 `*access.log`/`*error.log`, nginx access/error, vsftpd.log/xferlog | SMTP/IMAP may share mail.log; discover daemon destinations and webmail application logs (Roundcube path is installation dependent); append actual paths |
+| `debian-splunk` | auth.log/syslog and package history, local inputs only | Built-in `_audit`/`_internal` already cover Splunk logs; relay mode includes OS **and** appliance inputs without outputs.conf |
+| `2022-ad` | Security/System/Application | `--optional-source operational`, `--optional-source dc` for Directory Service/DNS Server/DFS Replication; Sysmon only if installed |
+| `2019-mssql` | Security/System/Application | operational/Sysmon optional; discovered ERRORLOG `:sql_error` and SQL Agent `SQLAGENT.OUT:sql_agent` via explicit path options |
+| `ubuntu-workstation` | auth.log/syslog, apt/history.log/dpkg.log | optional auditd security telemetry; journal alternative |
+| `windows11-workstation` | Security/System/Application | operational PowerShell/Defender/TaskScheduler/WMI channels and optional installed Sysmon |
+| `kali` | auth.log/syslog and package history | optional auditd, journal alternative; append actual watch result file `:kali_watch` |
+| `palo-alto` | TCP relay file, `pan_raw` | System/Config forwarding in Device Log Settings; Traffic requires rule logging and forwarding profile; Threat requires supported security profiles/features and generated events |
+| `vyos` | TCP relay file, `vyos_syslog` | Verify authentication and commit messages on installed build; firewall logs require explicit logging on selected existing rules; snapshots are not commit-event history |
+
+PowerShell keeps existing invocations valid: `-HostId` defaults to the workstation profile and core channels only. Optional groups are opt-in in both generators; unavailable channels must be omitted. Confirm channels with `Get-WinEvent -ListLog`, their `IsEnabled` value, and the UF service account's access. Security process creation/command-line events need advanced audit policy and optional command-line policy; PowerShell content needs script/module logging, TaskScheduler may need channel enablement, Defender may be absent, and Sysmon requires an approved existing installation/configuration. A generated stanza enables collection, not event generation. `dc` is valid only for `2022-ad`.
+
+Copyable discovery and generation examples (replace discovered paths and receiver first):
+
+```bash
+sudo find /var/log -maxdepth 3 -type f -print
+sudo systemctl status auditd rsyslog --no-pager
+sudo journalctl --since '-15 min' --no-pager -n 30
+python3 scripts/splunk_setup.py rocky-ecom --receiver 172.20.240.20 --optional-source auditd --input /srv/shop/log/app.log:app_error plan
+python3 scripts/splunk_setup.py ubuntu-email --receiver 172.20.240.20 --input /srv/webmail/log/errors.log:app_error plan
+python3 scripts/splunk_setup.py kali --receiver 172.20.240.20 --os-source journal --input '/srv/kali-results/*.json:kali_watch' plan
+python3 scripts/splunk_setup.py debian-splunk --receiver 172.20.240.20 --method syslog plan
+python3 scripts/splunk_setup.py 2022-ad --receiver 172.20.240.20 --optional-source operational --optional-source dc plan
+python3 scripts/splunk_setup.py 2019-mssql --receiver 172.20.240.20 --input 'C:\SQL\Log\ERRORLOG:sql_error' --input 'C:\SQL\Log\SQLAGENT.OUT:sql_agent' plan
+```
+
+```powershell
+Get-WinEvent -ListLog * | Select-Object LogName, IsEnabled, RecordCount
+Get-CimInstance Win32_Service | Where-Object Name -Match 'SQL|Splunk' | Select-Object Name, StartName, PathName
+# Discover SQL ERRORLOG via the instance startup -e parameter; discover Agent's log in its properties.
+.\scripts\splunk_setup_windows.ps1 -Receiver 172.20.240.20 -HostId 2022-ad -OptionalSource operational,dc
+.\scripts\splunk_setup_windows.ps1 -Receiver 172.20.240.20 -HostId 2019-mssql -InputPath @('C:\SQL\Log\ERRORLOG:sql_error','C:\SQL\Log\SQLAGENT.OUT:sql_agent')
+& 'C:\Program Files\SplunkUniversalForwarder\bin\splunk.exe' btool inputs list --debug
+& 'C:\Program Files\SplunkUniversalForwarder\bin\splunk.exe' list forward-server
+```
+
+`--input`/`-InputPath` append to baseline and deduplicate exact paths (case insensitive on Windows); conflicting sourcetypes are rejected. Avoid overlapping patterns or shared daemon files under different paths: string deduplication cannot detect identical events in two files. Choose `--os-source journal` to replace auth/system file candidates with `/var/log/team-journal.log`; provision the approved text export described above first. Never monitor binary journals. Auditd is added only with `--optional-source auditd` after confirming daemon, rules and permission. Do not add Splunk's own log directory; verify existing built-in indexing instead. Debian relay generation contains both local and remote stanzas: deploy that combined inputs.conf, rather than overwriting it with a second OS-only file. No self-forwarding output or second UF is needed. Preserve existing outputs/apps, appliance rules and syslog destinations; review btool for other inputs covering the same files.
+
+### Kali nested JSON result ingestion
+
+Keep the watch schema unchanged. Store each completed pretty-printed result as a new immutable `.json` file in a protected directory (redirect to a temporary file then rename after completion); never repeatedly truncate one monitored file. Append `--input '/srv/kali-results/*.json:kali_watch'`. The UF monitors files; configure event boundaries on the first full parsing tier (indexer/heavy forwarder), in the collection app's `props.conf`. Set `KV_MODE = json` on the search tier as well when it is separate:
+
+```ini
+[kali_watch]
+SHOULD_LINEMERGE = false
+LINE_BREAKER = ([\r\n]+)(?=\{)
+TRUNCATE = 0
+DATETIME_CONFIG = CURRENT
+KV_MODE = json
+```
+
+This assumes one complete JSON document per file with only its root `{` at column zero, as emitted by the script. Review result size and ingestion limits before using unlimited truncation. `_time` is ingestion time here; each `passes{}.time_utc` remains authoritative for the check time. Do not enable both indexed JSON extraction and search-time JSON extraction. Use explicit `spath` as shown in the hunting guide. Failed/partial executions are operator collection errors, not healthy watch results.
+
+Verify a bounded sample and ingestion delay after deploying with the existing staged apply/rollback procedure:
+
+```spl
+index=team_security earliest=-17m latest=-2m
+| stats count latest(_time) AS last_event latest(_indextime) AS last_ingest by host source sourcetype
+```
