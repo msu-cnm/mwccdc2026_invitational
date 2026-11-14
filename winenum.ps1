@@ -74,66 +74,23 @@ $out += "=== ENVIRONMENT VARIABLES ==="; $out += (Get-ChildItem Env: | Out-Strin
 Write-Host "[*] Collecting drives..." -ForegroundColor Yellow
 $out += "=== DRIVES ==="; $out += (Get-PSDrive | Out-String)
 
-Write-Host "[+] Enumeration complete. Preparing upload..." -ForegroundColor Green
+Write-Host "[+] Enumeration complete. Saving file..." -ForegroundColor Green
+
+# Use hostname in filename so multiple machines don't overwrite each other
+$hostname = hostname
+$filename = "$hostname-inventory.txt"
+$filepath = "C:\Users\Public\$filename"
 
 $body = $out -join "`n"
-$uploaded = $false
+$body | Out-File -FilePath $filepath -Encoding UTF8
+Write-Host "[+] Saved to $filepath" -ForegroundColor Green
 
-# Save locally first so we always have a copy
-$body | Out-File -FilePath C:\Users\Public\inventory.txt -Encoding UTF8
-Write-Host "[+] Local copy saved to C:\Users\Public\inventory.txt" -ForegroundColor Green
-
-# Method 1: paste.ee
-Write-Host "[*] Trying paste.ee..." -ForegroundColor Cyan
+# Upload via curl
+Write-Host "[*] Uploading to docs.ccdc.events..." -ForegroundColor Cyan
 try {
-    $payload = ConvertTo-Json @{sections=@(@{name="inventory";syntax="text";contents=$body})}
-    $response = Invoke-RestMethod -Uri "https://paste.ee/api/paste" -Method Post -ContentType "application/json" -Body $payload -Headers @{Accept="application/json"}
-    Write-Host "[+] paste.ee success!" -ForegroundColor Green
-    Write-Host "[+] Response: $($response | ConvertTo-Json -Depth 5)" -ForegroundColor Green
-    $uploaded = $true
+    $result = curl.exe -T $filepath -u "Sx8Yyx8p7Ydt742:" -H "X-Requested-With: XMLHttpRequest" "https://docs.ccdc.events/public.php/dav/files/Sx8Yyx8p7Ydt742/$filename"
+    Write-Host "[+] Upload complete: $result" -ForegroundColor Green
 } catch {
-    Write-Host "[-] paste.ee failed: $($_.Exception.Message)" -ForegroundColor Red
-}
-
-# Method 2: file.io
-if (-not $uploaded) {
-    Write-Host "[*] Trying file.io..." -ForegroundColor Cyan
-    try {
-        $fileBytes = [System.IO.File]::ReadAllBytes("C:\Users\Public\inventory.txt")
-        $fileEnc = [System.Text.Encoding]::UTF8.GetString($fileBytes)
-        $boundary = [System.Guid]::NewGuid().ToString()
-        $bodyLines = @(
-            "--$boundary",
-            "Content-Disposition: form-data; name=`"file`"; filename=`"inventory.txt`"",
-            "Content-Type: text/plain",
-            "",
-            $fileEnc,
-            "--$boundary--"
-        )
-        $multipartBody = $bodyLines -join "`r`n"
-        $response = Invoke-RestMethod -Uri "https://file.io/?expires=1d" -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $multipartBody
-        Write-Host "[+] file.io success!" -ForegroundColor Green
-        Write-Host "[+] URL: $($response.link)" -ForegroundColor Green
-        $uploaded = $true
-    } catch {
-        Write-Host "[-] file.io failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-# Method 3: webhook.site
-if (-not $uploaded) {
-    Write-Host "[*] Trying webhook.site..." -ForegroundColor Cyan
-    try {
-        $response = Invoke-RestMethod -Uri "https://webhook.site/876989bb-721a-41a8-8fc4-0f8c381bd65d" -Method Post -Body $body -ContentType "text/plain; charset=utf-8"
-        Write-Host "[+] webhook.site success!" -ForegroundColor Green
-        $uploaded = $true
-    } catch {
-        Write-Host "[-] webhook.site failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-if (-not $uploaded) {
-    Write-Host "[-] All upload methods failed. Retrieve file manually from C:\Users\Public\inventory.txt" -ForegroundColor Red
-} else {
-    Write-Host "[+] Done." -ForegroundColor Green
+    Write-Host "[-] Upload failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "[-] File is still available locally at $filepath" -ForegroundColor Red
 }
